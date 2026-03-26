@@ -1,1 +1,30 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Playwright outputs
+test-output/
+playwright-report/
+blob-report/
+
+# Runtime logs and temp
+*.log
+*.tmp
+*.temp
+*.pid
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Optional artifacts
+coverage/
