@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Perf Summary Example</title>
+  <style>
+    :root {
+      --bg: #eef2f9;
+      --card: #ffffff;
+      --line: #d9e1ee;
+      --text: #17223a;
+      --muted: #5f6f8b;
+      --inhouse: #2563eb;
+      --other1: #16a34a;
+      --other2: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: linear-gradient(180deg, #f7f9fd 0%, var(--bg) 100%); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .wrap { max-width: 1320px; margin: 24px auto; padding: 0 16px 44px; }
+    .head { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+    .sub { margin-top: 6px; color: var(--muted); font-size: 14px; }
+    .fab-actions { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+    .fab-row { display: inline-flex; gap: 8px; }
+    .fab-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 92px; padding: 8px 12px; border-radius: 999px; border: 1px solid #c8d6ef; background: #f5f9ff; color: #25406f; font-size: 12px; font-weight: 700; text-decoration: none; box-shadow: 0 4px 14px rgba(28, 52, 92, 0.14); }
+    .fab-btn:hover { background: #eaf3ff; border-color: #b4c8e8; }
+    .fab-tip { color: #5f7191; font-size: 11px; background: rgba(255, 255, 255, 0.92); border: 1px solid #d5e0f2; border-radius: 10px; padding: 6px 8px; }
+    .cards { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: 0 1px 4px rgba(16,24,40,0.04); }
+    .card .k { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .v-list { display: grid; gap: 6px; }
+    .kv { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 6px; font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    .name { color: #2c3a54; }
+    .num { font-weight: 700; color: #0f1d38; }
+    .legend { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #334155; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    .insight-wrap { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .insight-item { background: #fff; border: 1px solid #dbe4f2; border-radius: 12px; padding: 10px 12px; }
+    .insight-item.good { border-color: #bde7ce; background: #f3fcf7; }
+    .insight-item.mid { border-color: #f2dfb5; background: #fffaf0; }
+    .insight-item.bad { border-color: #f0c8c8; background: #fff6f6; }
+    .insight-title { font-size: 12px; font-weight: 800; color: #1f2a44; margin-bottom: 4px; }
+    .insight-text { font-size: 12px; color: #495670; line-height: 1.4; }
+    .trend-grid { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .trend-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: 0 1px 4px rgba(16,24,40,0.04); }
+    .trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+    .trend-head h3 { margin: 0; font-size: 14px; color: #334155; }
+    .trend-sub { color: #7a8aa5; font-size: 11px; }
+    .trend-card svg { width: 100%; height: auto; display: block; background: linear-gradient(180deg, #fbfdff 0%, #f7faff 100%); border: 1px solid #e6edf9; border-radius: 10px; }
+    .chart-grid { stroke: #e8eef8; stroke-width: 1; }
+    .axis-text { fill: #6f7f99; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .latest-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .latest-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #3c4a63; background: #f4f8ff; border: 1px solid #e3ebfb; border-radius: 999px; padding: 3px 8px; }
+    .latest-item i { width: 7px; height: 7px; border-radius: 999px; display: inline-block; }
+    .panels { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: 0 1px 4px rgba(16,24,40,0.04); }
+    .panel h3 { margin: 0 0 10px; font-size: 14px; color: var(--muted); letter-spacing: 0.01em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .axis-meta { font-size: 11px; color: #7386a7; }
+    .bar-row { border-top: 1px solid #f0f3f8; padding: 8px 0 4px; }
+    .bar-row:first-of-type { border-top: none; }
+    .bar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .bar-case { font-size: 12px; color: #334155; font-weight: 700; }
+    .bar-meta { font-size: 11px; color: #6b7a96; background: #f3f7ff; border: 1px solid #e3eaf8; border-radius: 999px; padding: 2px 8px; }
+    .v-chart { display: flex; align-items: flex-end; justify-content: center; gap: 7px; min-height: 190px; padding: 0 4px; }
+    .v-col { flex: 0 0 auto; width: 78px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .v-value { font-size: 11px; color: #334155; text-align: center; font-weight: 700; background: #f3f7ff; border: 1px solid #e3eaf8; border-radius: 999px; padding: 2px 8px; }
+    .v-track { width: 21px; height: 136px; background: repeating-linear-gradient(to top, #edf2f8 0, #edf2f8 1px, #f8fbff 1px, #f8fbff 20%); border-radius: 10px; display: flex; align-items: flex-end; overflow: hidden; border: 1px solid #e5ebf5; }
+    .v-fill { width: 100%; border-radius: 8px 8px 0 0; }
+    .v-label { font-size: 11px; font-weight: 700; text-align: center; }
+    .v-delta { font-size: 10px; color: #64748b; min-height: 14px; }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 1px 4px rgba(16,24,40,0.04); }
+    th, td { padding: 11px 10px; border-bottom: 1px solid var(--line); font-size: 12px; text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th:nth-child(2), td:nth-child(2) { text-align: left; }
+    th:nth-child(3), td:nth-child(3) { text-align: left; }
+    th { background: #f2f6fd; color: #44516a; font-weight: 700; }
+    tbody tr:nth-child(even) td { background: #fbfdff; }
+    tbody tr:hover td { background: #f6f9ff; }
+    .metric-chip { display: inline-block; background: #ecf3ff; color: #284c7a; border: 1px solid #d8e6ff; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+    .section-title { margin: 18px 0 8px; font-size: 14px; color: #334155; }
+    tr:last-child td { border-bottom: none; }
+    @media (max-width: 1024px) {
+      .cards { grid-template-columns: 1fr 1fr; }
+      .insight-wrap { grid-template-columns: 1fr; }
+      .trend-grid { grid-template-columns: 1fr; }
+      .panels { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>성능 비교 대시보드 (예시)</h1>
+      <div class="sub">단말 iPhone 16 Pro 기준 앱 비교</div>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="k">E2E 평균 (ms)</div>
+        <div class="v-list">
+          <div class="kv"><span class="dot" style="background:var(--inhouse)"></span><span class="name">자사앱</span><span class="num">8421</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other1)"></span><span class="name">타사앱1</span><span class="num">7905</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other2)"></span><span class="name">타사앱2</span><span class="num">9150</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">Memory Delta 평균 (MB)</div>
+        <div class="v-list">
+          <div class="kv"><span class="dot" style="background:var(--inhouse)"></span><span class="name">자사앱</span><span class="num">15.2</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other1)"></span><span class="name">타사앱1</span><span class="num">14.7</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other2)"></span><span class="name">타사앱2</span><span class="num">17.1</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">CPU 평균 (%)</div>
+        <div class="v-list">
+          <div class="kv"><span class="dot" style="background:var(--inhouse)"></span><span class="name">자사앱</span><span class="num">18.6</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other1)"></span><span class="name">타사앱1</span><span class="num">22.3</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other2)"></span><span class="name">타사앱2</span><span class="num">20.1</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">Current Avg (mA)</div>
+        <div class="v-list">
+          <div class="kv"><span class="dot" style="background:var(--inhouse)"></span><span class="name">자사앱</span><span class="num">512</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other1)"></span><span class="name">타사앱1</span><span class="num">468</span></div>
+          <div class="kv"><span class="dot" style="background:var(--other2)"></span><span class="name">타사앱2</span><span class="num">590</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      <span class="legend-item"><i class="legend-dot" style="background:var(--inhouse)"></i>자사앱</span>
+      <span class="legend-item"><i class="legend-dot" style="background:var(--other1)"></i>타사앱1</span>
+      <span class="legend-item"><i class="legend-dot" style="background:var(--other2)"></i>타사앱2</span>
+    </div>
+
+    <h2 class="section-title">한눈 해석 (예시)</h2>
+    <section class="insight-wrap">
+      <div class="insight-item mid">
+        <div class="insight-title">E2E 응답시간 (ms)</div>
+        <div class="insight-text">자사앱이 2/3위입니다. 1위(타사앱1) 대비 +516ms (+6.5%) 높습니다.</div>
+      </div>
+      <div class="insight-item mid">
+        <div class="insight-title">메모리 변화량 (MB)</div>
+        <div class="insight-text">자사앱이 2/3위입니다. 1위(타사앱1) 대비 +0.50MB (+3.4%) 높습니다.</div>
+      </div>
+      <div class="insight-item good">
+        <div class="insight-title">CPU 평균 사용률 (%)</div>
+        <div class="insight-text">자사앱이 1위(최저)입니다.</div>
+      </div>
+      <div class="insight-item mid">
+        <div class="insight-title">평균 전류 (mA)</div>
+        <div class="insight-text">자사앱이 2/3위입니다. 1위(타사앱1) 대비 +44mA (+9.4%) 높습니다.</div>
+      </div>
+    </section>
+
+    <h2 class="section-title">반복 회차 추이 (예시, 5회)</h2>
+    <div class="trend-grid">
+      <section class="trend-card">
+        <div class="trend-head"><h3>E2E (ms)</h3><div class="trend-sub">045. 영문 디폴트 설정 · 5회차</div></div>
+        <svg viewBox="0 0 560 220">
+          <line x1="40" y1="16" x2="544" y2="16" class="chart-grid"/><line x1="40" y1="53" x2="544" y2="53" class="chart-grid"/><line x1="40" y1="90" x2="544" y2="90" class="chart-grid"/><line x1="40" y1="127" x2="544" y2="127" class="chart-grid"/><line x1="40" y1="164" x2="544" y2="164" class="chart-grid"/>
+          <polyline fill="none" stroke="var(--inhouse)" stroke-width="2.2" points="40,92 166,96 292,90 418,98 544,94"/>
+          <polyline fill="none" stroke="var(--other1)" stroke-width="2.2" points="40,160 166,162 292,158 418,164 544,161"/>
+          <polyline fill="none" stroke="var(--other2)" stroke-width="2.2" points="40,24 166,20 292,28 418,16 544,22"/>
+          <circle cx="40" cy="92" r="3.2" fill="var(--inhouse)"/><circle cx="166" cy="96" r="3.2" fill="var(--inhouse)"/><circle cx="292" cy="90" r="3.2" fill="var(--inhouse)"/><circle cx="418" cy="98" r="3.2" fill="var(--inhouse)"/><circle cx="544" cy="94" r="3.2" fill="var(--inhouse)"/>
+          <circle cx="40" cy="160" r="3.2" fill="var(--other1)"/><circle cx="166" cy="162" r="3.2" fill="var(--other1)"/><circle cx="292" cy="158" r="3.2" fill="var(--other1)"/><circle cx="418" cy="164" r="3.2" fill="var(--other1)"/><circle cx="544" cy="161" r="3.2" fill="var(--other1)"/>
+          <circle cx="40" cy="24" r="3.2" fill="var(--other2)"/><circle cx="166" cy="20" r="3.2" fill="var(--other2)"/><circle cx="292" cy="28" r="3.2" fill="var(--other2)"/><circle cx="418" cy="16" r="3.2" fill="var(--other2)"/><circle cx="544" cy="22" r="3.2" fill="var(--other2)"/>
+          <text x="32" y="20" text-anchor="end" class="axis-text">9300</text><text x="32" y="168" text-anchor="end" class="axis-text">7800</text>
+          <text x="40" y="210" text-anchor="middle" class="axis-text">1</text><text x="166" y="210" text-anchor="middle" class="axis-text">2</text><text x="292" y="210" text-anchor="middle" class="axis-text">3</text><text x="418" y="210" text-anchor="middle" class="axis-text">4</text><text x="544" y="210" text-anchor="middle" class="axis-text">5</text>
+        </svg>
+      </section>
+      <section class="trend-card">
+        <div class="trend-head"><h3>Memory Delta (MB)</h3><div class="trend-sub">045. 영문 디폴트 설정 · 5회차</div></div>
+        <svg viewBox="0 0 560 220">
+          <line x1="40" y1="16" x2="544" y2="16" class="chart-grid"/><line x1="40" y1="53" x2="544" y2="53" class="chart-grid"/><line x1="40" y1="90" x2="544" y2="90" class="chart-grid"/><line x1="40" y1="127" x2="544" y2="127" class="chart-grid"/><line x1="40" y1="164" x2="544" y2="164" class="chart-grid"/>
+          <polyline fill="none" stroke="var(--inhouse)" stroke-width="2.2" points="40,128 166,126 292,132 418,130 544,129"/>
+          <polyline fill="none" stroke="var(--other1)" stroke-width="2.2" points="40,160 166,162 292,161 418,163 544,160"/>
+          <polyline fill="none" stroke="var(--other2)" stroke-width="2.2" points="40,24 166,20 292,28 418,18 544,22"/>
+          <text x="32" y="20" text-anchor="end" class="axis-text">17.5</text><text x="32" y="168" text-anchor="end" class="axis-text">14.0</text>
+          <text x="40" y="210" text-anchor="middle" class="axis-text">1</text><text x="166" y="210" text-anchor="middle" class="axis-text">2</text><text x="292" y="210" text-anchor="middle" class="axis-text">3</text><text x="418" y="210" text-anchor="middle" class="axis-text">4</text><text x="544" y="210" text-anchor="middle" class="axis-text">5</text>
+        </svg>
+      </section>
+    </div>
+
+    <div class="panels">
+      <section class="panel">
+        <h3>E2E (ms) <span class="axis-meta">(시각 축 0 ~ 9150 / 실측 7905 ~ 9150)</span></h3>
+        <div class="bar-row">
+          <div class="bar-head"><div class="bar-case">045. 영문 디폴트 설정</div><div class="bar-meta">min 7905 / max 9150</div></div>
+          <div class="v-chart">
+            <div class="v-col"><div class="v-value">8421</div><div class="v-track"><div class="v-fill" style="height:92%;background:var(--inhouse)"></div></div><div class="v-label" style="color:var(--inhouse)">자사앱</div><div class="v-delta">+516 (+6.5%)</div></div>
+            <div class="v-col"><div class="v-value">7905</div><div class="v-track"><div class="v-fill" style="height:86%;background:var(--other1)"></div></div><div class="v-label" style="color:var(--other1)">타사앱1</div><div class="v-delta">기준</div></div>
+            <div class="v-col"><div class="v-value">9150</div><div class="v-track"><div class="v-fill" style="height:100%;background:var(--other2)"></div></div><div class="v-label" style="color:var(--other2)">타사앱2</div><div class="v-delta">+1245 (+15.7%)</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>Memory Delta (MB) <span class="axis-meta">(시각 축 0 ~ 17.1 / 실측 14.7 ~ 17.1)</span></h3>
+        <div class="bar-row">
+          <div class="bar-head"><div class="bar-case">045. 영문 디폴트 설정</div><div class="bar-meta">min 14.7 / max 17.1</div></div>
+          <div class="v-chart">
+            <div class="v-col"><div class="v-value">15.2</div><div class="v-track"><div class="v-fill" style="height:89%;background:var(--inhouse)"></div></div><div class="v-label" style="color:var(--inhouse)">자사앱</div><div class="v-delta">+0.50 (+3.4%)</div></div>
+            <div class="v-col"><div class="v-value">14.7</div><div class="v-track"><div class="v-fill" style="height:86%;background:var(--other1)"></div></div><div class="v-label" style="color:var(--other1)">타사앱1</div><div class="v-delta">기준</div></div>
+            <div class="v-col"><div class="v-value">17.1</div><div class="v-track"><div class="v-fill" style="height:100%;background:var(--other2)"></div></div><div class="v-label" style="color:var(--other2)">타사앱2</div><div class="v-delta">+2.40 (+16.3%)</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>CPU Avg (%) <span class="axis-meta">(시각 축 0 ~ 22.3 / 실측 18.6 ~ 22.3)</span></h3>
+        <div class="bar-row">
+          <div class="bar-head"><div class="bar-case">045. 영문 디폴트 설정</div><div class="bar-meta">min 18.6 / max 22.3</div></div>
+          <div class="v-chart">
+            <div class="v-col"><div class="v-value">18.6</div><div class="v-track"><div class="v-fill" style="height:83%;background:var(--inhouse)"></div></div><div class="v-label" style="color:var(--inhouse)">자사앱</div><div class="v-delta">기준</div></div>
+            <div class="v-col"><div class="v-value">22.3</div><div class="v-track"><div class="v-fill" style="height:100%;background:var(--other1)"></div></div><div class="v-label" style="color:var(--other1)">타사앱1</div><div class="v-delta">+3.70 (+19.9%)</div></div>
+            <div class="v-col"><div class="v-value">20.1</div><div class="v-track"><div class="v-fill" style="height:90%;background:var(--other2)"></div></div><div class="v-label" style="color:var(--other2)">타사앱2</div><div class="v-delta">+1.50 (+8.1%)</div></div>
+          </div>
+        </div>
+      </section>
+
+
+      <section class="panel">
+        <h3>Current Avg (mA) <span class="axis-meta">(시각 축 0 ~ 590 / 실측 468 ~ 590)</span></h3>
+        <div class="bar-row">
+          <div class="bar-head"><div class="bar-case">045. 영문 디폴트 설정</div><div class="bar-meta">min 468 / max 590</div></div>
+          <div class="v-chart">
+            <div class="v-col"><div class="v-value">512</div><div class="v-track"><div class="v-fill" style="height:87%;background:var(--inhouse)"></div></div><div class="v-label" style="color:var(--inhouse)">자사앱</div><div class="v-delta">+44 (+9.4%)</div></div>
+            <div class="v-col"><div class="v-value">468</div><div class="v-track"><div class="v-fill" style="height:79%;background:var(--other1)"></div></div><div class="v-label" style="color:var(--other1)">타사앱1</div><div class="v-delta">기준</div></div>
+            <div class="v-col"><div class="v-value">590</div><div class="v-track"><div class="v-fill" style="height:100%;background:var(--other2)"></div></div><div class="v-label" style="color:var(--other2)">타사앱2</div><div class="v-delta">+122 (+26.1%)</div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <h2 class="section-title">반복 실행 통계 (min / p5 / avg / p95 / max)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>number</th>
+          <th>caseName</th>
+          <th>metric</th>
+          <th>target</th>
+          <th>n</th>
+          <th>min</th>
+          <th>p5</th>
+          <th>avg</th>
+          <th>p95</th>
+          <th>max</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">E2E (ms)</span></td><td>자사앱</td><td>8</td><td>8120</td><td>8185</td><td>8421</td><td>8710</td><td>8822</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">E2E (ms)</span></td><td>타사앱1</td><td>8</td><td>7651</td><td>7704</td><td>7905</td><td>8121</td><td>8204</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">E2E (ms)</span></td><td>타사앱2</td><td>8</td><td>8991</td><td>9052</td><td>9150</td><td>9298</td><td>9364</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">Current Avg (mA)</span></td><td>자사앱</td><td>8</td><td>486</td><td>492</td><td>512</td><td>536</td><td>544</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">Current Avg (mA)</span></td><td>타사앱1</td><td>8</td><td>452</td><td>457</td><td>468</td><td>484</td><td>490</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">Current Avg (mA)</span></td><td>타사앱2</td><td>8</td><td>562</td><td>569</td><td>590</td><td>614</td><td>621</td></tr>
+      </tbody>
+    </table>
+
+    <h2 class="section-title">최신 스냅샷 비교</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>number</th>
+          <th>caseName</th>
+          <th>metric</th>
+          <th>자사앱</th>
+          <th>타사앱1</th>
+          <th>타사앱2</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">E2E (ms)</span></td><td>8421</td><td>7905</td><td>9150</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">Memory Delta (MB)</span></td><td>15.2</td><td>14.7</td><td>17.1</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">CPU Avg (%)</span></td><td>18.6</td><td>22.3</td><td>20.1</td></tr>
+        <tr><td>045</td><td>영문 디폴트 설정</td><td><span class="metric-chip">Current Avg (mA)</span></td><td>512</td><td>468</td><td>590</td></tr>
+      </tbody>
+    </table>
+
+    <div class="fab-actions" aria-label="다운로드">
+      <div class="fab-row">
+        <a class="fab-btn" href="./summary.csv" download>CSV</a>
+        <a class="fab-btn" href="./summary_stats.csv" download>통계 CSV</a>
+        <a class="fab-btn" href="./summary.xlsx" download>XLSX</a>
+        <a class="fab-btn" href="./summary.pdf" download>PDF</a>
+      </div>
+      <div class="fab-tip">실행 후 생성된 최신 파일(summary.xlsx / summary.pdf)을 내려받으세요.</div>
+    </div>
+  </div>
+</body>
+</html>

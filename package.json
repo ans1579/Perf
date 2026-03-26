@@ -1,0 +1,32 @@
+{
+  "name": "perf",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test -c playwright.config.ts",
+    "test:ios": "PERF_PLATFORM=ios playwright test -c playwright.config.ts",
+    "test:aos": "PERF_PLATFORM=aos playwright test -c playwright.config.ts",
+    "test:list": "playwright test -c playwright.config.ts --list",
+    "report": "playwright show-report test-output/report",
+    "report:pdf": "node scripts/export-summary-pdf.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "webdriverio": "^9.26.1"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0"
+  }
+}
