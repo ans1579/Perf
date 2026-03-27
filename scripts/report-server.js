@@ -8,6 +8,11 @@ const { generateSummaryPdf } = require('./export-summary-pdf');
 const host = process.env.PERF_REPORT_HOST ?? '127.0.0.1';
 const port = Number(process.env.PERF_REPORT_PORT ?? 9324);
 const baseDir = path.resolve(process.cwd(), 'test-output', 'perf-metrics');
+let inFlightPdfJob = null;
+
+function isTruthy(value) {
+  return /^(1|true|yes|y|on)$/i.test(String(value ?? '').trim());
+}
 
 function sendJson(res, code, payload) {
   const body = JSON.stringify(payload);
@@ -72,16 +77,24 @@ async function serveFile(res, filePath, headOnly) {
   stream.pipe(res);
 }
 
-async function handleGeneratePdf(res) {
+async function handleGeneratePdf(res, force = false) {
   const inputHtml = path.join(baseDir, 'summary.html');
   const outputPdf = path.join(baseDir, 'summary.pdf');
 
   try {
-    await generateSummaryPdf({ inputHtml, outputPdf, cwd: process.cwd() });
+    if (!inFlightPdfJob) {
+      inFlightPdfJob = generateSummaryPdf({ inputHtml, outputPdf, cwd: process.cwd(), force })
+        .finally(() => {
+          inFlightPdfJob = null;
+        });
+    }
+
+    const result = await inFlightPdfJob;
     sendJson(res, 200, {
       ok: true,
       file: '/summary.pdf',
       generatedAt: new Date().toISOString(),
+      skipped: Boolean(result?.skipped),
     });
   } catch (err) {
     sendJson(res, 500, {
@@ -107,7 +120,7 @@ const server = http.createServer(async (req, res) => {
       res.end('Method Not Allowed');
       return;
     }
-    await handleGeneratePdf(res);
+    await handleGeneratePdf(res, isTruthy(url.searchParams.get('force')));
     return;
   }
 

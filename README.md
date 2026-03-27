@@ -128,6 +128,8 @@ test('perf batch', async () => {
 - `PERF_SUMMARY_DEVICE_NAME`: summary 표기용 단말명 override
 - `PERF_SUMMARY_FORCE`: `1/true`면 변경 감지와 무관하게 summary 강제 재생성
 - `PERF_WRITE_METRICS_CSV`: `0/false`면 `metrics.csv` 기록 비활성화 (기본값 `1`)
+- `PERF_PDF_FORCE`: `1/true`면 PDF 최신 여부와 무관하게 강제 재생성
+- `PERF_PDF_NAV_TIMEOUT_MS`: PDF 렌더링 시 `summary.html` 로드 타임아웃(ms)
 
 ### iOS (`utils/appium.ts`)
 - `IOS_APPIUM_HOST`, `IOS_APPIUM_PORT`, `IOS_APPIUM_PATH`
@@ -184,6 +186,8 @@ iOS 성능 샘플러(선택):
 - PDF가 없으면:
   - `npm run report:pdf` 실행
   - 또는 테스트 실행 후 `finalizePerfBatch()` 재호출
+- PDF를 강제로 다시 만들고 싶으면:
+  - `PERF_PDF_FORCE=1 npm run report:pdf`
 - iOS current 값이 비어 있으면:
   - `IOS_CURRENT_CMD` 미설정 상태일 수 있으며, 이 경우 null 처리되는 것이 정상
 

@@ -156,7 +156,10 @@ function readMetrics(): MetricLine[] {
       const m = JSON.parse(line) as MetricLine;
       if (!m?.category || !m?.target || !m?.name || !m?.device) continue;
       out.push(m);
-    } catch {}
+    } catch {
+      // 손상된 JSONL 라인은 건너뜁니다.
+      continue;
+    }
   }
   return out;
 }
@@ -686,7 +689,7 @@ function toneFill(tone: 'good' | 'bad' | 'mid' | 'muted') {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F7FA' } } as const;
 }
 
-async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: string[], statRows: StatRow[]) {
+async function _writeSummaryXlsx(device: string, rows: CompareRow[], targets: string[], statRows: StatRow[]) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const exceljsMod: any = await import('exceljs');
   const WorkbookCtor = exceljsMod.Workbook ?? exceljsMod.default?.Workbook;
@@ -1692,6 +1695,8 @@ export async function generateSummaryArtifacts(options: { force?: boolean } = {}
         generatedAt: new Date().toISOString(),
         device,
       });
-    } catch {}
+    } catch (e) {
+      console.warn('[summary] summary.meta.json 생성 실패:', (e as Error).message);
+    }
   }
 }

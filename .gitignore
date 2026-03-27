@@ -28,3 +28,6 @@ Thumbs.db
 
 # Optional artifacts
 coverage/
+
+# Personal workspace files
+*.code-workspace
