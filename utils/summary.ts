@@ -53,7 +53,15 @@ const SUMMARY_RAW_CSV = path.join(OUT_DIR, 'summary_raw.csv');
 const SUMMARY_STATS_CSV = path.join(OUT_DIR, 'summary_stats.csv');
 const SUMMARY_HTML = path.join(OUT_DIR, 'summary.html');
 const SUMMARY_XLSX = path.join(OUT_DIR, 'summary.xlsx');
+const SUMMARY_PDF = path.join(OUT_DIR, 'summary.pdf');
+const SUMMARY_META = path.join(OUT_DIR, 'summary.meta.json');
 const CASE_KEY_SEP = '\u0001';
+
+type SummaryMeta = {
+  sourceStamp: string;
+  generatedAt: string;
+  device: string;
+};
 
 function escapeHtml(value: string): string {
   return value
@@ -147,8 +155,54 @@ function pickDevice(metrics: MetricLine[]): string {
   const byEnv = (process.env.PERF_SUMMARY_DEVICE_NAME ?? '').trim();
   if (byEnv) return byEnv;
   if (metrics.length === 0) return 'UNKNOWN_DEVICE';
-  const latest = [...metrics].sort((a, b) => toEpoch(b.ts) - toEpoch(a.ts))[0];
-  return latest.device;
+
+  let latestTs = Number.NEGATIVE_INFINITY;
+  let latestDevice = metrics[metrics.length - 1]?.device ?? metrics[0].device;
+  for (const m of metrics) {
+    const ts = toEpoch(m.ts);
+    if (ts >= latestTs) {
+      latestTs = ts;
+      latestDevice = m.device;
+    }
+  }
+  return latestDevice;
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  return /^(1|true|yes|y|on)$/i.test((value ?? '').trim());
+}
+
+function buildMetricsSourceStamp(): string | null {
+  try {
+    const st = fs.statSync(JSONL_PATH);
+    return `${st.size}:${Math.floor(st.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+function readSummaryMeta(): SummaryMeta | null {
+  if (!fs.existsSync(SUMMARY_META)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SUMMARY_META, 'utf8')) as Partial<SummaryMeta>;
+    if (!parsed || typeof parsed.sourceStamp !== 'string') return null;
+    return {
+      sourceStamp: parsed.sourceStamp,
+      generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : '',
+      device: typeof parsed.device === 'string' ? parsed.device : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeSummaryMeta(meta: SummaryMeta) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.writeFileSync(SUMMARY_META, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+}
+
+function hasRequiredSummaryOutputs(): boolean {
+  return [SUMMARY_CSV, SUMMARY_RAW_CSV, SUMMARY_STATS_CSV, SUMMARY_HTML, SUMMARY_PDF].every((f) => fs.existsSync(f));
 }
 
 function setLatest(target: CaseByTarget, key: keyof CaseByTarget, next: Point) {
@@ -277,7 +331,7 @@ function metricRankText(values: Record<string, number | null>, targets: string[]
     .map((t) => ({ t, v: values[t] }))
     .filter((x): x is { t: string; v: number } => x.v !== null)
     .sort((a, b) => a.v - b.v);
-  return items.map((x, i) => `${i + 1}위 ${x.t}(${x.v})`).join(' > ');
+  return items.map((x, i) => `${i + 1}위 ${x.t}(${x.v})`).join(' / ');
 }
 
 function rowSpread(values: Record<string, number | null>, targets: string[]): { abs: number | null; pct: number | null } {
@@ -288,6 +342,25 @@ function rowSpread(values: Record<string, number | null>, targets: string[]): { 
   const abs = Number((max - min).toFixed(2));
   const pct = min === 0 ? null : Number((((max - min) / Math.abs(min)) * 100).toFixed(2));
   return { abs, pct };
+}
+
+function verdictByDiff(diff: number): string {
+  if (diff < 0) return '우수';
+  if (diff > 0) return '열위';
+  return '동일';
+}
+
+function repeatReliabilityLabel(count: number): string {
+  if (count >= 10) return '높음';
+  if (count >= 5) return '보통';
+  if (count >= 3) return '낮음';
+  return '매우 낮음';
+}
+
+function repeatReliabilityTone(count: number): 'good' | 'mid' | 'bad' {
+  if (count >= 10) return 'good';
+  if (count >= 5) return 'mid';
+  return 'bad';
 }
 
 function writeCsvLines(filePath: string, rows: string[][]) {
@@ -393,7 +466,7 @@ function writeSummaryCsv(device: string, rows: CompareRow[], targets: string[]) 
         String(v),
         String(diff),
         pct === null ? '' : `${pct}%`,
-        diff <= 0 ? '우수 또는 동일' : '열위',
+        verdictByDiff(diff),
       ]);
     }
   }
@@ -486,7 +559,19 @@ function buildStatRows(metrics: MetricLine[], targets: string[]): StatRow[] {
 
 function writeSummaryStatsCsv(device: string, rows: StatRow[]) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const lines: string[][] = [[
+  const nowKst = new Date().toLocaleString('sv-SE', {
+    timeZone: 'Asia/Seoul',
+    hour12: false,
+  }).replace(' ', 'T');
+
+  const lines: string[][] = [
+    ['section', '반복 실행 통계'],
+    ['항목', '값'],
+    ['생성시각(KST)', nowKst],
+    ['단말', device],
+    ['해석 가이드', 'p5/p95는 극단값 영향을 줄인 분포 범위입니다. n(반복횟수)이 많을수록 신뢰도가 높습니다.'],
+    [],
+    [
     '단말',
     '번호',
     '케이스',
@@ -501,6 +586,7 @@ function writeSummaryStatsCsv(device: string, rows: StatRow[]) {
     'max',
     '변동폭(max-min)',
     '중앙구간폭(p95-p5)',
+    '신뢰도',
   ]];
 
   for (const row of rows) {
@@ -521,6 +607,7 @@ function writeSummaryStatsCsv(device: string, rows: StatRow[]) {
       toCsvValue(row.max),
       toCsvValue(spread),
       toCsvValue(midSpread),
+      repeatReliabilityLabel(row.count),
     ].map((v) => String(v)));
   }
   writeCsvLines(SUMMARY_STATS_CSV, lines);
@@ -599,6 +686,7 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
   wb.modified = new Date();
 
   const baseline = targets[0] ?? '';
+  const baselineTargetIndex = baseline ? targets.findIndex((t) => t === baseline) : -1;
   const metrics: MetricKey[] = ['e2eMs', 'memoryDeltaMB', 'cpuAvgPct', 'currentAvgmA'];
   const borderThin = {
     top: { style: 'thin' as const, color: { argb: 'FFD9E2EF' } },
@@ -626,11 +714,15 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
   }
 
   const headerRow1 = ws1.addRow(avgHeaders);
-  headerRow1.eachCell((cell: any) => {
+  headerRow1.eachCell((cell: any, idx: number) => {
     cell.font = { bold: true, color: { argb: 'FF334155' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF1FF' } };
     cell.border = borderThin;
     cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    if (baselineTargetIndex >= 0 && idx === 3 + baselineTargetIndex) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCEBFF' } };
+      cell.font = { bold: true, color: { argb: 'FF1D4ED8' } };
+    }
   });
 
   for (const metric of metrics) {
@@ -681,11 +773,15 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
   const ws2 = wb.addWorksheet('케이스비교', { views: [{ state: 'frozen', ySplit: 1 }] });
   const caseHeaders = ['번호', '케이스', '지표', '단위', ...targets, '1등(최저)', '꼴등(최고)', '최대-최소', '격차(%)', '순위'];
   const caseHeader = ws2.addRow(caseHeaders);
-  caseHeader.eachCell((cell: any) => {
+  caseHeader.eachCell((cell: any, idx: number) => {
     cell.font = { bold: true, color: { argb: 'FF334155' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF1FF' } };
     cell.border = borderThin;
     cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    if (baselineTargetIndex >= 0 && idx === 5 + baselineTargetIndex) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCEBFF' } };
+      cell.font = { bold: true, color: { argb: 'FF1D4ED8' } };
+    }
   });
 
   for (const rowData of rows) {
@@ -723,7 +819,7 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
   autoFitColumns(ws2, 10, 46);
 
   const ws3 = wb.addWorksheet('반복통계', { views: [{ state: 'frozen', ySplit: 1 }] });
-  const statHeaders = ['번호', '케이스', '지표', '단위', '앱', '반복횟수', 'min', 'p5', 'avg', 'p95', 'max', '변동폭(max-min)', '중앙구간폭(p95-p5)'];
+  const statHeaders = ['번호', '케이스', '지표', '단위', '앱', '반복횟수', 'min', 'p5', 'avg', 'p95', 'max', '변동폭(max-min)', '중앙구간폭(p95-p5)', '신뢰도'];
   const statHeader = ws3.addRow(statHeaders);
   statHeader.eachCell((cell: any) => {
     cell.font = { bold: true, color: { argb: 'FF334155' } };
@@ -735,6 +831,8 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
   for (const row of statRows) {
     const spread = row.max !== null && row.min !== null ? Number((row.max - row.min).toFixed(2)) : null;
     const midSpread = row.p95 !== null && row.p5 !== null ? Number((row.p95 - row.p5).toFixed(2)) : null;
+    const reliability = repeatReliabilityLabel(row.count);
+    const reliabilityTone = repeatReliabilityTone(row.count);
     const rowExcel = ws3.addRow([
       row.caseNo,
       row.caseName,
@@ -749,6 +847,7 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
       row.max,
       spread,
       midSpread,
+      reliability,
     ]);
     rowExcel.eachCell((cell: any, idx: number) => {
       cell.border = borderThin;
@@ -756,6 +855,9 @@ async function writeSummaryXlsx(device: string, rows: CompareRow[], targets: str
         cell.numFmt = '0.00';
       }
     });
+    const reliabilityCell = ws3.getCell(rowExcel.number, 14);
+    reliabilityCell.fill = toneFill(reliabilityTone);
+    reliabilityCell.font = { bold: true, color: { argb: 'FF334155' } };
   }
   autoFitColumns(ws3, 10, 46);
 
@@ -766,6 +868,24 @@ function avg(values: Array<number | null>): number | null {
   const nums = values.filter((v): v is number => v !== null);
   if (nums.length === 0) return null;
   return Number((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2));
+}
+
+function summarizeRepeatReliability(statRows: StatRow[]): { label: string; detail: string; tone: 'good' | 'mid' | 'bad' | 'muted' } {
+  const counts = statRows.map((r) => r.count).filter((n) => Number.isFinite(n) && n > 0);
+  if (counts.length === 0) {
+    return { label: '데이터 없음', detail: '반복 통계가 아직 없습니다.', tone: 'muted' };
+  }
+
+  const min = Math.min(...counts);
+  const avgCount = Number((counts.reduce((a, b) => a + b, 0) / counts.length).toFixed(1));
+  const max = Math.max(...counts);
+  const label = repeatReliabilityLabel(min);
+  const tone = repeatReliabilityTone(min);
+  return {
+    label,
+    tone,
+    detail: `최소 n=${min}, 평균 n=${avgCount}, 최대 n=${max}`,
+  };
 }
 
 function format(v: number | null, unit = '') {
@@ -1192,6 +1312,7 @@ function writeSummaryHtml(
   const c = colors(targetList);
   const ranges = makeMetricRanges(rows, targetList);
   const runTrends = buildRunTrendData(metrics, targetList);
+  const reliability = summarizeRepeatReliability(statRows);
   const insightHtml = renderInsights(rows, targetList);
   const cards = {
     e2e: metricAverages(rows, targetList, 'e2eMs'),
@@ -1204,17 +1325,35 @@ function writeSummaryHtml(
   const legend = targetList
     .map((t) => `<span class="legend-item"><i class="legend-dot" style="background:${c[t]}"></i>${escapeHtml(t)}</span>`)
     .join('');
-  const tableRows = rows
-    .map((r) => {
-      const vals = targetList.map((t) => `<td>${format(r.values[t])}</td>`).join('');
-      return `<tr><td>${escapeHtml(r.caseNo)}</td><td>${escapeHtml(r.caseName)}</td><td><span class="metric-chip">${metricLabel(
-        r.metric
-      )}</span></td>${vals}</tr>`;
-    })
-    .join('\n');
+  const tableRows =
+    rows.length === 0
+      ? `<tr><td colspan="${3 + targetList.length}">최신 스냅샷 데이터가 없습니다.</td></tr>`
+      : rows
+          .map((r) => {
+            const nums = targetList.map((t) => r.values[t]).filter((v): v is number => v !== null);
+            const rowMin = nums.length === 0 ? null : Math.min(...nums);
+            const rowMax = nums.length === 0 ? null : Math.max(...nums);
+            const vals = targetList
+              .map((t) => {
+                const v = r.values[t];
+                const best = v !== null && rowMin !== null && v === rowMin;
+                const worst = v !== null && rowMax !== null && rowMax !== rowMin && v === rowMax;
+                const cls = best ? 'best' : worst ? 'worst' : '';
+                return `<td${cls ? ` class="${cls}"` : ''}>${format(v)}</td>`;
+              })
+              .join('');
+            return `<tr><td>${escapeHtml(r.caseNo)}</td><td>${escapeHtml(r.caseName)}</td><td><span class="metric-chip">${metricLabel(
+              r.metric
+            )}</span></td>${vals}</tr>`;
+          })
+          .join('\n');
   const statRowsHtml = statRows
-    .map(
-      (r) => `<tr>
+    .map((r) => {
+      const spread = r.max !== null && r.min !== null ? Number((r.max - r.min).toFixed(2)) : null;
+      const midSpread = r.p95 !== null && r.p5 !== null ? Number((r.p95 - r.p5).toFixed(2)) : null;
+      const reliabilityText = repeatReliabilityLabel(r.count);
+      const reliabilityTone = repeatReliabilityTone(r.count);
+      return `<tr>
         <td>${escapeHtml(r.caseNo)}</td>
         <td>${escapeHtml(r.caseName)}</td>
         <td><span class="metric-chip">${metricLabel(r.metric)}</span></td>
@@ -1225,8 +1364,11 @@ function writeSummaryHtml(
         <td>${format(r.avg)}</td>
         <td>${format(r.p95)}</td>
         <td>${format(r.max)}</td>
-      </tr>`
-    )
+        <td>${format(spread)}</td>
+        <td>${format(midSpread)}</td>
+        <td><span class="reliability-chip ${reliabilityTone}">${reliabilityText}</span></td>
+      </tr>`;
+    })
     .join('\n');
 
   const html = `<!doctype html>
@@ -1308,15 +1450,44 @@ function writeSummaryHtml(
     th { background: #f2f6fd; color: #44516a; font-weight: 700; }
     tbody tr:nth-child(even) td { background: #fbfdff; }
     tbody tr:hover td { background: #f6f9ff; }
+    td.best { background: #ecfdf3 !important; color: #166534; font-weight: 700; }
+    td.worst { background: #fff1f2 !important; color: #b42318; font-weight: 700; }
     .metric-chip { display: inline-block; background: #ecf3ff; color: #284c7a; border: 1px solid #d8e6ff; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+    .reliability-chip { display: inline-flex; align-items: center; justify-content: center; min-width: 58px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; border: 1px solid transparent; }
+    .reliability-chip.good { background: #ebf9f0; color: #166534; border-color: #c8eed6; }
+    .reliability-chip.mid { background: #fff8ea; color: #92400e; border-color: #f7e5b8; }
+    .reliability-chip.bad { background: #fff1f2; color: #9f1239; border-color: #fecdd3; }
+    .reliability-note { margin: -2px 0 10px; display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 5px 10px; font-size: 12px; border: 1px solid #d9e1ee; background: #f8fbff; color: #40516b; }
+    .reliability-note.good { background: #f1f9f4; border-color: #cae9d5; color: #166534; }
+    .reliability-note.mid { background: #fffaf0; border-color: #f2dfb5; color: #92400e; }
+    .reliability-note.bad { background: #fff6f6; border-color: #f0c8c8; color: #9f1239; }
+    .reliability-note.muted { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
     .section-title { margin: 18px 0 8px; font-size: 14px; color: #334155; }
+    .section-desc { margin: -2px 0 10px; color: #64748b; font-size: 12px; line-height: 1.45; }
+    .table-wrap { overflow-x: auto; border-radius: 14px; }
     tr:last-child td { border-bottom: none; }
     .empty { font-size: 13px; color: var(--muted); padding: 12px 0; }
+    @media print {
+      body { background: #fff; }
+      .wrap { max-width: none; margin: 0; padding: 0; }
+      .fab-actions { display: none !important; }
+      .head, .card, .trend-card, .panel, table { box-shadow: none; break-inside: avoid; }
+      .section-title { margin-top: 12px; }
+    }
     @media (max-width: 1024px) {
       .cards { grid-template-columns: 1fr 1fr; }
       .insight-wrap { grid-template-columns: 1fr; }
       .trend-grid { grid-template-columns: 1fr; }
       .panels { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .wrap { padding: 0 10px 28px; }
+      h1 { font-size: 22px; }
+      .v-col { width: 66px; }
+      .v-track { height: 112px; }
+      table { min-width: 760px; }
+      th, td { padding: 9px 8px; font-size: 11px; }
+      .fab-actions { right: 10px; bottom: 10px; }
     }
   </style>
 </head>
@@ -1338,6 +1509,7 @@ function writeSummaryHtml(
     ${insightHtml}
 
     <h2 class="section-title">반복 회차 추이</h2>
+    <div class="section-desc">각 지표별로 대표 케이스 1개를 선택해 회차(1~N) 추이를 보여줍니다. 스냅샷 표와 역할이 다릅니다.</div>
     <div class="trend-grid">
       ${runTrendCard('e2eMs', runTrends.e2eMs, targetList, c)}
       ${runTrendCard('memoryDeltaMB', runTrends.memoryDeltaMB, targetList, c)}
@@ -1346,6 +1518,7 @@ function writeSummaryHtml(
     </div>
 
     <h2 class="section-title">케이스별 스냅샷 비교</h2>
+    <div class="section-desc">같은 케이스에서 앱별 최신 값을 막대로 비교합니다. 값이 낮을수록 우수입니다.</div>
     <div class="panels">
       ${panel('e2eMs', rows, targetList, c, ranges)}
       ${panel('memoryDeltaMB', rows, targetList, c, ranges)}
@@ -1354,45 +1527,54 @@ function writeSummaryHtml(
     </div>
 
     <h2 class="section-title">반복 실행 통계 (min / p5 / avg / p95 / max)</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>number</th>
-          <th>caseName</th>
-          <th>metric</th>
-          <th>target</th>
-          <th>n</th>
-          <th>min</th>
-          <th>p5</th>
-          <th>avg</th>
-          <th>p95</th>
-          <th>max</th>
-        </tr>
-      </thead>
-      <tbody>${statRowsHtml || '<tr><td colspan="10">통계 데이터가 없습니다.</td></tr>'}</tbody>
-    </table>
+    <div class="section-desc">p5/p95는 극단값 영향을 줄인 분포 지표입니다. 반복횟수(n)가 많을수록 신뢰도가 높습니다.</div>
+    <div class="reliability-note ${reliability.tone}">반복 신뢰도: <strong>${reliability.label}</strong> · ${reliability.detail}</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>번호</th>
+            <th>케이스</th>
+            <th>지표</th>
+            <th>앱</th>
+            <th>반복수</th>
+            <th>min</th>
+            <th>p5</th>
+            <th>avg</th>
+            <th>p95</th>
+            <th>max</th>
+            <th>변동폭</th>
+            <th>중앙구간폭</th>
+            <th>신뢰도</th>
+          </tr>
+        </thead>
+        <tbody>${statRowsHtml || '<tr><td colspan="13">통계 데이터가 없습니다.</td></tr>'}</tbody>
+      </table>
+    </div>
 
     <h2 class="section-title">최신 스냅샷 비교</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>number</th>
-          <th>caseName</th>
-          <th>metric</th>
-          ${targetCols}
-        </tr>
-      </thead>
-      <tbody>${tableRows}</tbody>
-    </table>
+    <div class="section-desc">각 케이스의 최신 측정값을 표로 확인합니다. 보고서 공유/검토 시 원문 데이터 용도입니다.</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>번호</th>
+            <th>케이스</th>
+            <th>지표</th>
+            ${targetCols}
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
 
     <div class="fab-actions" aria-label="다운로드">
       <div class="fab-row">
         <a class="fab-btn" href="./summary.csv" download>CSV</a>
         <a class="fab-btn" href="./summary_stats.csv" download>통계 CSV</a>
-        <a class="fab-btn" href="./summary.xlsx" download>XLSX</a>
         <a class="fab-btn" href="./summary.pdf" download>PDF</a>
       </div>
-      <div class="fab-tip">PDF/XLSX가 없으면 테스트를 다시 실행해 최신 파일을 생성해 주세요.</div>
+      <div class="fab-tip">PDF가 없으면 테스트를 다시 실행해 최신 파일을 생성해 주세요.</div>
     </div>
   </div>
 </body>
@@ -1402,7 +1584,43 @@ function writeSummaryHtml(
   fs.writeFileSync(SUMMARY_HTML, html, 'utf8');
 }
 
-export async function generateSummaryArtifacts() {
+async function writeSummaryPdf() {
+  type PdfOptions = {
+    cwd: string;
+    inputHtml: string;
+    outputPdf: string;
+  };
+  type PdfModule = {
+    generateSummaryPdf?: (options: PdfOptions) => Promise<void>;
+    default?: {
+      generateSummaryPdf?: (options: PdfOptions) => Promise<void>;
+    };
+  };
+
+  const mod = require('../scripts/export-summary-pdf.js') as PdfModule;
+  const generateSummaryPdf = mod.generateSummaryPdf ?? mod.default?.generateSummaryPdf;
+
+  if (typeof generateSummaryPdf !== 'function') {
+    throw new Error('generateSummaryPdf 함수를 찾지 못했습니다.');
+  }
+
+  await generateSummaryPdf({
+    cwd: process.cwd(),
+    inputHtml: SUMMARY_HTML,
+    outputPdf: SUMMARY_PDF,
+  });
+}
+
+export async function generateSummaryArtifacts(options: { force?: boolean } = {}) {
+  const force = options.force === true || isTruthyEnv(process.env.PERF_SUMMARY_FORCE);
+  const sourceStamp = buildMetricsSourceStamp();
+  if (!sourceStamp) return;
+
+  if (!force && hasRequiredSummaryOutputs()) {
+    const prev = readSummaryMeta();
+    if (prev?.sourceStamp === sourceStamp) return;
+  }
+
   const allMetrics = readMetrics();
   if (allMetrics.length === 0) return;
 
@@ -1412,9 +1630,43 @@ export async function generateSummaryArtifacts() {
   const rows = makeRows(cases, targets);
   const statRows = buildStatRows(metrics, targets);
 
-  writeSummaryCsv(device, rows, targets);
-  writeSummaryRawCsv(device, rows, targets);
-  writeSummaryStatsCsv(device, statRows);
-  await writeSummaryXlsx(device, rows, targets, statRows);
-  writeSummaryHtml(device, rows, targets, statRows, metrics);
+  try {
+    writeSummaryCsv(device, rows, targets);
+  } catch (e) {
+    console.warn('[summary] summary.csv 생성 실패:', (e as Error).message);
+  }
+
+  try {
+    writeSummaryRawCsv(device, rows, targets);
+  } catch (e) {
+    console.warn('[summary] summary_raw.csv 생성 실패:', (e as Error).message);
+  }
+
+  try {
+    writeSummaryStatsCsv(device, statRows);
+  } catch (e) {
+    console.warn('[summary] summary_stats.csv 생성 실패:', (e as Error).message);
+  }
+
+  // XLSX 생성은 현재 비활성화 상태입니다.
+
+  try {
+    writeSummaryHtml(device, rows, targets, statRows, metrics);
+  } catch (e) {
+    console.warn('[summary] summary.html 생성 실패:', (e as Error).message);
+  }
+
+  try {
+    await writeSummaryPdf();
+  } catch (e) {
+    console.warn('[summary] summary.pdf 생성 실패:', (e as Error).message);
+  }
+
+  try {
+    writeSummaryMeta({
+      sourceStamp,
+      generatedAt: new Date().toISOString(),
+      device,
+    });
+  } catch {}
 }

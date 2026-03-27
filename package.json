@@ -9,7 +9,9 @@
     "test:aos": "PERF_PLATFORM=aos playwright test -c playwright.config.ts",
     "test:list": "playwright test -c playwright.config.ts --list",
     "report": "playwright show-report test-output/report",
-    "report:pdf": "node scripts/export-summary-pdf.js"
+    "report:pdf": "node scripts/export-summary-pdf.js",
+    "report:sync-example": "node scripts/sync-examples.js",
+    "report:serve": "node scripts/report-server.js"
   },
   "keywords": [],
   "author": "",

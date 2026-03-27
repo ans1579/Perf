@@ -1,4 +1,5 @@
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { AOS, IOS, type PerfPlatform } from './appium';
 import { nowIso, writeMetric } from './metric';
 import { generateSummaryArtifacts } from './summary';
@@ -18,9 +19,13 @@ type RunPerfOptions = {
   caseNo?: number | string; // 예: 1, 001
   caseName: string;
   sampleMs?: number;
+  // true면 해당 케이스 종료 시 즉시 summary 생성 (기본값: false)
+  writeSummary?: boolean;
   samplers: PerfSamplers;
   run: () => Promise<void>;
 };
+
+const execAsync = promisify(exec);
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -29,6 +34,19 @@ function sleep(ms: number) {
 function toNumber(text: string): number | null {
   const m = text.match(/-?\d+(\.\d+)?/);
   return m ? Number(m[0]) : null;
+}
+
+async function execText(command: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(command, {
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
+    });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
 }
 
 async function safeSample(sampler?: Sampler): Promise<number | null> {
@@ -60,7 +78,7 @@ function toCaseKey(caseNo: number | string | undefined, caseName: string): strin
 }
 
 export async function runPerfCase(options: RunPerfOptions) {
-  const { platform, deviceName, target, caseNo, caseName, run, samplers } = options;
+  const { platform, deviceName, target, caseNo, caseName, run, samplers, writeSummary = false } = options;
   const sampleMs = options.sampleMs ?? 1500;
   const caseKey = toCaseKey(caseNo, caseName);
 
@@ -69,22 +87,33 @@ export async function runPerfCase(options: RunPerfOptions) {
   const cpuSamples: number[] = [];
   const currentSamples: number[] = [];
   let stopSampling = false;
-  const cpuLoop = (async () => {
+  const samplingLoop = (async () => {
+    // Use fixed target ticks so sampler runtime does not permanently shift the cadence.
+    let nextTick = Date.now();
     while (!stopSampling) {
-      const cpu = await safeSample(samplers.cpu);
+      const [cpu, current] = await Promise.all([
+        safeSample(samplers.cpu),
+        safeSample(samplers.current),
+      ]);
       if (cpu !== null) cpuSamples.push(cpu);
-      const current = await safeSample(samplers.current);
       if (current !== null) currentSamples.push(current);
-      await sleep(sampleMs);
+      nextTick += sampleMs;
+      const wait = Math.max(0, nextTick - Date.now());
+      await sleep(wait);
     }
   })();
 
   const startedAt = Date.now();
-  await run();
+  let runError: unknown = null;
+  try {
+    await run();
+  } catch (e) {
+    runError = e;
+  }
   const e2eMs = Date.now() - startedAt;
 
   stopSampling = true;
-  await cpuLoop;
+  await samplingLoop;
 
   const memoryAfter = await safeSample(samplers.memory);
 
@@ -106,18 +135,23 @@ export async function runPerfCase(options: RunPerfOptions) {
     pushMetric('current', platform, deviceName, target, `${caseKey}.avg`, Number(avg.toFixed(2)), 'mA');
   }
 
-  try {
-    await generateSummaryArtifacts();
-  } catch {}
+  if (writeSummary) {
+    try {
+      await generateSummaryArtifacts();
+    } catch {}
+  }
+
+  if (runError) throw runError;
 }
 
-function execNumber(command: string): number | null {
-  try {
-    const out = execSync(command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return toNumber(out);
-  } catch {
-    return null;
-  }
+// 배치(반복 실행) 마지막에 1회만 호출해서 summary 산출물 생성
+export async function finalizePerfBatch() {
+  await generateSummaryArtifacts();
+}
+
+async function execNumber(command: string): Promise<number | null> {
+  const out = await execText(command);
+  return out === null ? null : toNumber(out);
 }
 
 function normalizeCurrentToMilliAmp(raw: number): number {
@@ -133,10 +167,8 @@ export function createAosSamplers(): PerfSamplers {
   const pkg = AOS.appPackage;
 
   const memory: Sampler = async () => {
-    const out = execSync(`adb -s ${udid} shell dumpsys meminfo ${pkg}`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const out = await execText(`adb -s ${udid} shell dumpsys meminfo ${pkg}`);
+    if (out === null) return null;
     const pssKb =
       toNumber(out.match(/TOTAL\s+PSS:\s+(\d+)/)?.[1] ?? '') ??
       toNumber(out.match(/\bTOTAL\b\s+(\d+)\s+/m)?.[1] ?? '');
@@ -144,22 +176,17 @@ export function createAosSamplers(): PerfSamplers {
   };
 
   const cpu: Sampler = async () => {
-    const out = execSync(`adb -s ${udid} shell dumpsys cpuinfo ${pkg}`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const out = await execText(`adb -s ${udid} shell dumpsys cpuinfo ${pkg}`);
+    if (out === null) return null;
     const percent = toNumber(out.match(/([\d.]+)%/m)?.[1] ?? '');
     return percent === null ? null : Number(percent.toFixed(2));
   };
 
   const current: Sampler = async () => {
-    const out = execSync(
+    const out = await execText(
       `adb -s ${udid} shell "cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || echo ''"`,
-      {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }
-    ).trim();
+    );
+    if (out === null) return null;
     const n = toNumber(out);
     return n === null ? null : normalizeCurrentToMilliAmp(n);
   };
@@ -181,7 +208,7 @@ export function createIosSamplers(): PerfSamplers {
   }
   if (currentCmd) {
     samplers.current = async () => {
-      const n = execNumber(currentCmd);
+      const n = await execNumber(currentCmd);
       return n === null ? null : normalizeCurrentToMilliAmp(n);
     };
   }
