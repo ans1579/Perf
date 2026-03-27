@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import type { PerfPlatform } from "./appium";
 
 type MetricCategory = "e2e" | "memory" | "cpu" | "current";
@@ -146,16 +147,19 @@ function compareCaseKey(a: string, b: string): number {
     return ca.caseName.localeCompare(cb.caseName, "ko");
 }
 
-function readMetrics(): MetricLine[] {
+async function readMetrics(): Promise<MetricLine[]> {
     if (!fs.existsSync(JSONL_PATH)) return [];
-    const lines = fs
-        .readFileSync(JSONL_PATH, "utf8")
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean);
 
     const out: MetricLine[] = [];
-    for (const line of lines) {
+    const stream = fs.createReadStream(JSONL_PATH, { encoding: "utf8" });
+    const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity,
+    });
+
+    for await (const rawLine of rl) {
+        const line = rawLine.trim();
+        if (!line) continue;
         try {
             const m = JSON.parse(line) as MetricLine;
             if (!m?.category || !m?.target || !m?.name || !m?.device) continue;
@@ -165,6 +169,7 @@ function readMetrics(): MetricLine[] {
             continue;
         }
     }
+
     return out;
 }
 
@@ -1211,6 +1216,33 @@ function metricAverages(
     return out;
 }
 
+type MetricAveragesMap = Record<MetricKey, Record<string, number | null>>;
+type MetricRankMap = Record<MetricKey, Array<{ target: string; value: number }>>;
+
+function buildMetricAveragesMap(
+    rows: CompareRow[],
+    targets: string[],
+): MetricAveragesMap {
+    return {
+        e2eMs: metricAverages(rows, targets, "e2eMs"),
+        memoryDeltaMB: metricAverages(rows, targets, "memoryDeltaMB"),
+        cpuAvgPct: metricAverages(rows, targets, "cpuAvgPct"),
+        currentAvgmA: metricAverages(rows, targets, "currentAvgmA"),
+    };
+}
+
+function buildMetricRankMap(
+    averagesByMetric: MetricAveragesMap,
+    targets: string[],
+): MetricRankMap {
+    return {
+        e2eMs: rankItems(averagesByMetric.e2eMs, targets),
+        memoryDeltaMB: rankItems(averagesByMetric.memoryDeltaMB, targets),
+        cpuAvgPct: rankItems(averagesByMetric.cpuAvgPct, targets),
+        currentAvgmA: rankItems(averagesByMetric.currentAvgmA, targets),
+    };
+}
+
 function renderCard(
     title: string,
     values: Record<string, number | null>,
@@ -1252,11 +1284,10 @@ function colors(targets: string[]): Record<string, string> {
 function buildInsight(
     metric: MetricKey,
     values: Record<string, number | null>,
-    targets: string[],
+    ranked: Array<{ target: string; value: number }>,
     baseline: string,
 ) {
     const title = toDisplayMetric(metric);
-    const ranked = rankItems(values, targets);
     if (ranked.length === 0) {
         return {
             title,
@@ -1316,7 +1347,11 @@ function buildInsight(
     };
 }
 
-function renderInsights(rows: CompareRow[], targets: string[]) {
+function renderInsights(
+    averagesByMetric: MetricAveragesMap,
+    ranksByMetric: MetricRankMap,
+    targets: string[],
+) {
     const baseline = targets[0] ?? "";
     const metricKeys: MetricKey[] = [
         "e2eMs",
@@ -1326,8 +1361,13 @@ function renderInsights(rows: CompareRow[], targets: string[]) {
     ];
     const items = metricKeys
         .map((metric) => {
-            const values = metricAverages(rows, targets, metric);
-            const insight = buildInsight(metric, values, targets, baseline);
+            const values = averagesByMetric[metric];
+            const insight = buildInsight(
+                metric,
+                values,
+                ranksByMetric[metric],
+                baseline,
+            );
             return `<div class="insight-item ${insight.tone}">
         <div class="insight-title">${escapeHtml(insight.title)}</div>
         <div class="insight-text">${escapeHtml(insight.text)}</div>
@@ -1731,17 +1771,23 @@ function writeSummaryHtml(
     targetList: string[],
     statRows: StatRow[],
     metrics: MetricLine[],
-) {
+): boolean {
     const c = colors(targetList);
     const ranges = makeMetricRanges(rows, targetList);
     const runTrends = buildRunTrendData(metrics, targetList);
     const reliability = summarizeRepeatReliability(statRows);
-    const insightHtml = renderInsights(rows, targetList);
+    const averagesByMetric = buildMetricAveragesMap(rows, targetList);
+    const ranksByMetric = buildMetricRankMap(averagesByMetric, targetList);
+    const insightHtml = renderInsights(
+        averagesByMetric,
+        ranksByMetric,
+        targetList,
+    );
     const cards = {
-        e2e: metricAverages(rows, targetList, "e2eMs"),
-        mem: metricAverages(rows, targetList, "memoryDeltaMB"),
-        cpu: metricAverages(rows, targetList, "cpuAvgPct"),
-        current: metricAverages(rows, targetList, "currentAvgmA"),
+        e2e: averagesByMetric.e2eMs,
+        mem: averagesByMetric.memoryDeltaMB,
+        cpu: averagesByMetric.cpuAvgPct,
+        current: averagesByMetric.currentAvgmA,
     };
 
     const targetCols = targetList
@@ -2067,7 +2113,12 @@ function writeSummaryHtml(
 </html>`;
 
     fs.mkdirSync(OUT_DIR, { recursive: true });
+    const prevHtml = fs.existsSync(SUMMARY_HTML)
+        ? fs.readFileSync(SUMMARY_HTML, "utf8")
+        : null;
+    if (prevHtml === html) return false;
     fs.writeFileSync(SUMMARY_HTML, html, "utf8");
+    return true;
 }
 
 async function writeSummaryPdf() {
@@ -2115,7 +2166,7 @@ export async function generateSummaryArtifacts(
             return;
     }
 
-    const allMetrics = readMetrics();
+    const allMetrics = await readMetrics();
     if (allMetrics.length === 0) return;
 
     const device = pickDevice(allMetrics);
@@ -2129,6 +2180,7 @@ export async function generateSummaryArtifacts(
     let statsOk = false;
     let htmlOk = false;
     let pdfOk = false;
+    let htmlChanged = false;
 
     try {
         writeSummaryCsv(device, rows, targets);
@@ -2160,15 +2212,20 @@ export async function generateSummaryArtifacts(
     // XLSX 생성은 현재 비활성화 상태입니다.
 
     try {
-        writeSummaryHtml(device, rows, targets, statRows, metrics);
+        htmlChanged = writeSummaryHtml(device, rows, targets, statRows, metrics);
         htmlOk = true;
     } catch (e) {
         console.warn("[summary] summary.html 생성 실패:", (e as Error).message);
     }
 
     try {
-        await writeSummaryPdf();
-        pdfOk = true;
+        const forcePdf = isTruthyEnv(process.env.PERF_PDF_FORCE);
+        if (!forcePdf && !htmlChanged && fs.existsSync(SUMMARY_PDF)) {
+            pdfOk = true;
+        } else {
+            await writeSummaryPdf();
+            pdfOk = true;
+        }
     } catch (e) {
         console.warn("[summary] summary.pdf 생성 실패:", (e as Error).message);
     }

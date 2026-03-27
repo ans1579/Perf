@@ -3,8 +3,20 @@ import { remote } from 'webdriverio';
 export type PerfPlatform = 'ios' | 'aos';
 
 function numEnv(name: string, fallback: number): number {
-  const v = Number(process.env[name]);
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+
+  const text = raw.trim();
+  if (!text) return fallback;
+
+  const v = Number(text);
   return Number.isFinite(v) ? v : fallback;
+}
+
+function toPositiveInt(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  const asInt = Math.trunc(value);
+  return asInt > 0 ? asInt : fallback;
 }
 
 export const IOS = {
@@ -34,9 +46,20 @@ export const AOS = {
   uia2LaunchTimeoutMs: numEnv('AOS_UIA2_LAUNCH_TIMEOUT', 120000),
   androidInstallTimeoutMs: numEnv('AOS_ANDROID_INSTALL_TIMEOUT', 120000),
   webviewDevtoolsPort: numEnv('AOS_WEBVIEW_DEVTOOLS_PORT', 10900),
+  chromedriverPort: numEnv('AOS_CHROMEDRIVER_PORT', 8000),
+  chromedriverPortRangeStart: numEnv('AOS_CHROMEDRIVER_PORT_RANGE_START', 9000),
+  chromedriverPortRangeEnd: numEnv('AOS_CHROMEDRIVER_PORT_RANGE_END', 9050),
   connectionRetryTimeoutMs: numEnv('AOS_WD_CONNECTION_RETRY_TIMEOUT', 120000),
   connectionRetryCount: numEnv('AOS_WD_CONNECTION_RETRY_COUNT', 2),
 };
+
+function getAosChromedriverPorts(): [number, [number, number]] {
+  const fixed = toPositiveInt(AOS.chromedriverPort, 8000);
+  const start = toPositiveInt(AOS.chromedriverPortRangeStart, 9000);
+  const end = toPositiveInt(AOS.chromedriverPortRangeEnd, 9050);
+  const [rangeStart, rangeEnd] = start <= end ? [start, end] : [end, start];
+  return [fixed, [rangeStart, rangeEnd]];
+}
 
 export async function openIosDriver() {
   const capabilities: Record<string, any> = {
@@ -76,6 +99,8 @@ export async function openIosDriver() {
 }
 
 export async function openAosDriver() {
+  const chromedriverPorts = getAosChromedriverPorts();
+
   const capabilities: Record<string, any> = {
     platformName: 'Android',
     'appium:automationName': 'UiAutomator2',
@@ -100,8 +125,8 @@ export async function openAosDriver() {
     'appium:ensureWebviewsHavePages': true,
     'appium:chromedriverAutodownload': true,
     'appium:recreateChromeDriverSessions': true,
-    'appium:webviewDevtoolsPort': AOS.webviewDevtoolsPort,
-    'appium:chromedriverPorts': [8000, [9000, 9050]],
+    'appium:webviewDevtoolsPort': toPositiveInt(AOS.webviewDevtoolsPort, 10900),
+    'appium:chromedriverPorts': chromedriverPorts,
   };
 
   return remote({

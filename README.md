@@ -136,12 +136,13 @@ test('perf batch', async () => {
 - `PERF_SUMMARY_FORCE`: `1/true`면 변경 감지와 무관하게 summary 강제 재생성
 - `PERF_WRITE_METRICS_CSV`: `0/false`면 `metrics.csv` 기록 비활성화 (기본값 `1`)
 - `PERF_BUFFER_METRICS`: `0/false`면 메트릭 버퍼링 비활성화(즉시 디스크 기록), 기본값 `1`
+- `PERF_METRICS_FLUSH_LINES`: 버퍼 모드에서 중간 flush 라인 수(기본값 `25`)
 - `PERF_PDF_FORCE`: `1/true`면 PDF 최신 여부와 무관하게 강제 재생성
 - `PERF_PDF_NAV_TIMEOUT_MS`: PDF 렌더링 시 `summary.html` 로드 타임아웃(ms)
 - `PERF_WARMUP_RUNS`: `runPerfCase` 워밍업 횟수(기본값 `0`)
 - `PERF_SAMPLE_GATE_RETRIES`: 샘플 최소치 미달 시 재시도 횟수(기본값 `1`)
 - `PERF_MIN_CPU_SAMPLES`: CPU 최소 샘플 수(기본값 `2`)
-- `PERF_MIN_CURRENT_SAMPLES`: Current 최소 샘플 수(기본값 `2`)
+- `PERF_MIN_CURRENT_SAMPLES`: Current 최소 샘플 수(기본값 `4`)
 
 ### iOS (`utils/appium.ts`)
 - `IOS_APPIUM_HOST`, `IOS_APPIUM_PORT`, `IOS_APPIUM_PATH`
@@ -167,8 +168,16 @@ iOS 성능 샘플러(선택):
 - `AOS_UIA2_LAUNCH_TIMEOUT`
 - `AOS_ANDROID_INSTALL_TIMEOUT`
 - `AOS_WEBVIEW_DEVTOOLS_PORT`
+- `AOS_CHROMEDRIVER_PORT` (기본 단일 포트, 기본값 `8000`)
+- `AOS_CHROMEDRIVER_PORT_RANGE_START` (범위 시작, 기본값 `9000`)
+- `AOS_CHROMEDRIVER_PORT_RANGE_END` (범위 끝, 기본값 `9050`)
 - `AOS_WD_CONNECTION_RETRY_TIMEOUT`
 - `AOS_WD_CONNECTION_RETRY_COUNT`
+
+Android current 수집 동작:
+- `BatteryAverageCurrent`를 우선 사용하고, 없으면 `current_now`로 fallback
+- 충전 상태 샘플은 제외
+- 수집값 부호를 해석해 방전 전류만 `mA`로 반영
 
 ## 산출물 안내
 모든 산출물은 `test-output/perf-metrics`에 생성됩니다.

@@ -26,11 +26,26 @@ const METRICS_CSV_ENABLED = !/^(0|false|no|off)$/i.test(
 const METRICS_BUFFERED = !/^(0|false|no|off)$/i.test(
     (process.env.PERF_BUFFER_METRICS ?? "1").trim(),
 );
+const METRICS_FLUSH_LINES = positiveIntEnv("PERF_METRICS_FLUSH_LINES", 25);
 
 let isPrepared = false;
 let flushHookInstalled = false;
 const pendingJsonl: string[] = [];
 const pendingCsv: string[] = [];
+
+function positiveIntEnv(name: string, fallback: number): number {
+    const raw = process.env[name];
+    if (raw === undefined) return fallback;
+
+    const text = raw.trim();
+    if (!text) return fallback;
+
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    const asInt = Math.trunc(parsed);
+    return asInt > 0 ? asInt : fallback;
+}
 
 function escapeCsv(value: string) {
     if (value.includes(",") || value.includes('"') || value.includes("\n")) {
@@ -60,6 +75,15 @@ function ensureFlushHook() {
 
     process.once("beforeExit", safeFlush);
     process.once("exit", safeFlush);
+
+    // Ctrl+C / SIGTERM 종료에서도 버퍼 유실을 최소화한다.
+    const onSignal = (exitCode: number) => () => {
+        safeFlush();
+        process.exit(exitCode);
+    };
+
+    process.once("SIGINT", onSignal(130));
+    process.once("SIGTERM", onSignal(143));
 }
 
 export function flushMetrics() {
@@ -106,7 +130,7 @@ export function writeMetric(metric: PerfMetric) {
     if (csvLine !== null) pendingCsv.push(csvLine);
 
     // 너무 오래 메모리에 쌓지 않도록 라인 수 기준으로 중간 flush
-    if (pendingJsonl.length >= 25) flushMetrics();
+    if (pendingJsonl.length >= METRICS_FLUSH_LINES) flushMetrics();
 }
 
 export function nowIso() {

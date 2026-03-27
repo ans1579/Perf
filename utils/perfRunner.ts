@@ -173,7 +173,7 @@ export async function runPerfCase(options: RunPerfOptions) {
     const minCurrentSamples = intOption(
         options.minCurrentSamples,
         "PERF_MIN_CURRENT_SAMPLES",
-        2,
+        4,
     );
 
     const runMeasuredOnce = async () => {
@@ -393,17 +393,35 @@ async function execNumber(command: string): Promise<number | null> {
     return out === null ? null : toNumber(out);
 }
 
-function normalizeCurrentToMilliAmp(raw: number): number {
+function normalizeCurrentToMilliAmpSigned(raw: number): number {
+    const sign = raw < 0 ? -1 : 1;
     const abs = Math.abs(raw);
-    // Device마다 current_now 단위가 다를 수 있어 큰 값은 uA로 보고 mA로 변환.
-    if (abs >= 10000) return Number((abs / 1000).toFixed(2));
-    if (abs > 5000) return Number((abs / 1000).toFixed(2));
-    return Number(abs.toFixed(2));
+    // Device마다 current 계열 단위가 다를 수 있어 큰 값은 uA로 보고 mA로 변환.
+    const milliAmp = abs >= 5000 ? abs / 1000 : abs;
+    return Number((milliAmp * sign).toFixed(2));
 }
 
 export function createAosSamplers(): PerfSamplers {
     const udid = AOS.udid;
     const pkg = AOS.appPackage;
+    let cachedCharging = false;
+    let cachedChargingCheckedAt = 0;
+
+    const isCharging = async (): Promise<boolean> => {
+        const now = Date.now();
+        if (now - cachedChargingCheckedAt < 5000) return cachedCharging;
+
+        const out = await execText(`adb -s ${udid} shell dumpsys battery`);
+        if (out !== null) {
+            const status = toNumber(out.match(/status:\s*(\d+)/)?.[1] ?? "");
+            if (status !== null) {
+                // Android status: 2=charging, 5=full(plugged)
+                cachedCharging = status === 2 || status === 5;
+            }
+        }
+        cachedChargingCheckedAt = now;
+        return cachedCharging;
+    };
 
     const memory: Sampler = async () => {
         const out = await execText(
@@ -427,11 +445,19 @@ export function createAosSamplers(): PerfSamplers {
 
     const current: Sampler = async () => {
         const out = await execText(
-            `adb -s ${udid} shell "cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || echo ''"`,
+            `adb -s ${udid} shell "cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || cat /sys/class/power_supply/battery/current_now 2>/dev/null || echo ''"`,
         );
         if (out === null) return null;
         const n = toNumber(out);
-        return n === null ? null : normalizeCurrentToMilliAmp(n);
+        if (n === null) return null;
+
+        // 충전 중 샘플은 소모량 비교에서 왜곡되므로 제외.
+        if (await isCharging()) return null;
+
+        const signedMilliAmp = normalizeCurrentToMilliAmpSigned(n);
+        // 부호가 양수면 충전/유입 전류로 보고 제외.
+        if (signedMilliAmp >= 0) return null;
+        return Number(Math.abs(signedMilliAmp).toFixed(2));
     };
 
     return { memory, cpu, current };
@@ -452,7 +478,10 @@ export function createIosSamplers(): PerfSamplers {
     if (currentCmd) {
         samplers.current = async () => {
             const n = await execNumber(currentCmd);
-            return n === null ? null : normalizeCurrentToMilliAmp(n);
+            if (n === null) return null;
+            const signedMilliAmp = normalizeCurrentToMilliAmpSigned(n);
+            if (signedMilliAmp >= 0) return null;
+            return Number(Math.abs(signedMilliAmp).toFixed(2));
         };
     }
 
