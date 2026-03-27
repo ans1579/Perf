@@ -7,11 +7,15 @@
     "test": "playwright test -c playwright.config.ts",
     "test:ios": "PERF_PLATFORM=ios playwright test -c playwright.config.ts",
     "test:aos": "PERF_PLATFORM=aos playwright test -c playwright.config.ts",
-    "test:list": "playwright test -c playwright.config.ts --list",
+    "test:list": "node scripts/test-list.js",
     "report": "playwright show-report test-output/report",
     "report:pdf": "node scripts/export-summary-pdf.js",
     "report:sync-example": "node scripts/sync-examples.js",
-    "report:serve": "node scripts/report-server.js"
+    "report:serve": "node scripts/report-server.js",
+    "test:list:raw": "playwright test -c playwright.config.ts --list",
+    "lint": "eslint \"**/*.ts\" --no-error-on-unmatched-pattern",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run lint && npm run typecheck"
   },
   "keywords": [],
   "author": "",

@@ -43,7 +43,11 @@ npm run report
 - `npm test`: 전체 테스트 실행
 - `npm run test:ios`: iOS만 실행 (`PERF_PLATFORM=ios`)
 - `npm run test:aos`: Android만 실행 (`PERF_PLATFORM=aos`)
-- `npm run test:list`: 테스트 목록 출력
+- `npm run test:list`: 테스트 목록 출력 (테스트가 없어도 실패 대신 안내 후 성공 처리)
+- `npm run test:list:raw`: Playwright 원본 `--list` 동작 그대로 실행
+- `npm run lint`: TypeScript 대상 ESLint 검사
+- `npm run typecheck`: TypeScript 타입 검사(`tsc --noEmit`)
+- `npm run check`: lint + typecheck 일괄 검사
 - `npm run report`: Playwright HTML 리포트 열기
 - `npm run report:pdf`: `summary.html` 기반으로 `summary.pdf` 생성
 - `npm run report:sync-example`: 최신 산출물을 `examples/*`로 동기화
@@ -51,9 +55,10 @@ npm run report
 
 ## 테스트 작성 규칙
 - `runPerfCase`는 케이스 1회 실행 + 메트릭 기록 담당
+- `runPerfCase`는 기본적으로 샘플 최소치 게이트를 적용합니다(미달 시 자동 재시도)
 - 배치(반복 실행) 마지막에 `finalizePerfBatch()`를 1회 호출해 요약 생성
 - 즉, 5회 반복이면 1~4회는 기록만 하고, 5회 종료 후 요약을 1번 생성
-- `runPerfBatch`를 사용하면 반복 실행 + 마지막 요약 생성을 한 번에 처리 가능
+- `runPerfBatch`를 사용하면 반복 실행 + 케이스별 1회 워밍업 + 마지막 요약 생성을 한 번에 처리 가능
 
 ## 기본 패턴 예시
 ```ts
@@ -115,6 +120,8 @@ test('perf batch', async () => {
       ],
       continueOnError: false,
       finalize: true,
+      // 기본값 true: 같은 case/target 조합의 첫 실행은 워밍업(메트릭 미기록)
+      warmupPerCase: true,
     });
   } finally {
     await driver.deleteSession();
@@ -128,8 +135,13 @@ test('perf batch', async () => {
 - `PERF_SUMMARY_DEVICE_NAME`: summary 표기용 단말명 override
 - `PERF_SUMMARY_FORCE`: `1/true`면 변경 감지와 무관하게 summary 강제 재생성
 - `PERF_WRITE_METRICS_CSV`: `0/false`면 `metrics.csv` 기록 비활성화 (기본값 `1`)
+- `PERF_BUFFER_METRICS`: `0/false`면 메트릭 버퍼링 비활성화(즉시 디스크 기록), 기본값 `1`
 - `PERF_PDF_FORCE`: `1/true`면 PDF 최신 여부와 무관하게 강제 재생성
 - `PERF_PDF_NAV_TIMEOUT_MS`: PDF 렌더링 시 `summary.html` 로드 타임아웃(ms)
+- `PERF_WARMUP_RUNS`: `runPerfCase` 워밍업 횟수(기본값 `0`)
+- `PERF_SAMPLE_GATE_RETRIES`: 샘플 최소치 미달 시 재시도 횟수(기본값 `1`)
+- `PERF_MIN_CPU_SAMPLES`: CPU 최소 샘플 수(기본값 `2`)
+- `PERF_MIN_CURRENT_SAMPLES`: Current 최소 샘플 수(기본값 `2`)
 
 ### iOS (`utils/appium.ts`)
 - `IOS_APPIUM_HOST`, `IOS_APPIUM_PORT`, `IOS_APPIUM_PATH`
