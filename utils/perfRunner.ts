@@ -25,6 +25,13 @@ type RunPerfOptions = {
   run: () => Promise<void>;
 };
 
+type RunPerfBatchOptions = {
+  cases: RunPerfOptions[];
+  continueOnError?: boolean;
+  finalize?: boolean;
+  forceSummary?: boolean;
+};
+
 const execAsync = promisify(exec);
 
 function sleep(ms: number) {
@@ -147,6 +154,37 @@ export async function runPerfCase(options: RunPerfOptions) {
 // 배치(반복 실행) 마지막에 1회만 호출해서 summary 산출물 생성
 export async function finalizePerfBatch() {
   await generateSummaryArtifacts();
+}
+
+// 반복 케이스 실행 + summary 종료 처리를 한 번에 보장하는 배치 유틸
+export async function runPerfBatch(options: RunPerfBatchOptions) {
+  const {
+    cases,
+    continueOnError = false,
+    finalize = true,
+    forceSummary = false,
+  } = options;
+
+  let firstError: unknown = null;
+
+  for (const c of cases) {
+    try {
+      await runPerfCase({ ...c, writeSummary: false });
+    } catch (e) {
+      if (!firstError) firstError = e;
+      if (!continueOnError) break;
+    }
+  }
+
+  if (finalize) {
+    try {
+      await generateSummaryArtifacts({ force: forceSummary });
+    } catch (e) {
+      if (!firstError) firstError = e;
+    }
+  }
+
+  if (firstError) throw firstError;
 }
 
 async function execNumber(command: string): Promise<number | null> {

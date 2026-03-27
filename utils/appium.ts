@@ -18,6 +18,8 @@ export const IOS = {
   wdaConnectionTimeoutMs: numEnv('IOS_WDA_CONNECTION_TIMEOUT', 120000),
   wdaStartupRetries: numEnv('IOS_WDA_STARTUP_RETRIES', 2),
   wdaStartupRetryIntervalMs: numEnv('IOS_WDA_STARTUP_RETRY_INTERVAL', 10000),
+  connectionRetryTimeoutMs: numEnv('IOS_WD_CONNECTION_RETRY_TIMEOUT', 120000),
+  connectionRetryCount: numEnv('IOS_WD_CONNECTION_RETRY_COUNT', 2),
 };
 
 export const AOS = {
@@ -32,74 +34,84 @@ export const AOS = {
   uia2LaunchTimeoutMs: numEnv('AOS_UIA2_LAUNCH_TIMEOUT', 120000),
   androidInstallTimeoutMs: numEnv('AOS_ANDROID_INSTALL_TIMEOUT', 120000),
   webviewDevtoolsPort: numEnv('AOS_WEBVIEW_DEVTOOLS_PORT', 10900),
+  connectionRetryTimeoutMs: numEnv('AOS_WD_CONNECTION_RETRY_TIMEOUT', 120000),
+  connectionRetryCount: numEnv('AOS_WD_CONNECTION_RETRY_COUNT', 2),
 };
 
 export async function openIosDriver() {
+  const capabilities: Record<string, any> = {
+    platformName: 'iOS',
+    'appium:automationName': 'XCUITest',
+    'appium:udid': IOS.udid,
+    'appium:deviceName': IOS.udid,
+    'appium:bundleId': IOS.bundleId,
+
+    'appium:noReset': true,
+    'appium:newCommandTimeout': IOS.newCommandTimeoutSec,
+
+    // Keep one device/one WDA port for stable parallel isolation.
+    'appium:wdaLocalPort': IOS.wdaLocalPort,
+    'appium:useNewWDA': false,
+    'appium:wdaStartupRetries': IOS.wdaStartupRetries,
+    'appium:wdaStartupRetryInterval': IOS.wdaStartupRetryIntervalMs,
+    'appium:wdaConnectionTimeout': IOS.wdaConnectionTimeoutMs,
+
+    // Reduce unnecessary idle waits for faster step-to-step flow.
+    'appium:waitForQuiescence': false,
+    'appium:waitForIdleTimeout': 1,
+    'appium:wdaEventloopIdleDelay': 0,
+    'appium:disableAutomaticScreenshots': true,
+    'appium:simpleIsVisibleCheck': true,
+  };
+
   return remote({
     hostname: IOS.host,
     port: IOS.port,
     path: IOS.path,
     logLevel: 'error',
-    capabilities: {
-      platformName: 'iOS',
-      'appium:automationName': 'XCUITest',
-      'appium:udid': IOS.udid,
-      'appium:deviceName': IOS.udid,
-      'appium:bundleId': IOS.bundleId,
-
-      'appium:noReset': true,
-      'appium:newCommandTimeout': IOS.newCommandTimeoutSec,
-
-      // Keep one device/one WDA port for stable parallel isolation.
-      'appium:wdaLocalPort': IOS.wdaLocalPort,
-      'appium:useNewWDA': false,
-      'appium:wdaStartupRetries': IOS.wdaStartupRetries,
-      'appium:wdaStartupRetryInterval': IOS.wdaStartupRetryIntervalMs,
-      'appium:wdaConnectionTimeout': IOS.wdaConnectionTimeoutMs,
-
-      // Reduce unnecessary idle waits for faster step-to-step flow.
-      'appium:waitForQuiescence': false,
-      'appium:waitForIdleTimeout': 1,
-      'appium:wdaEventloopIdleDelay': 0,
-      'appium:disableAutomaticScreenshots': true,
-      'appium:simpleIsVisibleCheck': true,
-    },
+    connectionRetryTimeout: IOS.connectionRetryTimeoutMs,
+    connectionRetryCount: IOS.connectionRetryCount,
+    capabilities,
   });
 }
 
 export async function openAosDriver() {
+  const capabilities: Record<string, any> = {
+    platformName: 'Android',
+    'appium:automationName': 'UiAutomator2',
+    'appium:udid': AOS.udid,
+    'appium:deviceName': AOS.udid,
+
+    'appium:appPackage': AOS.appPackage,
+    'appium:appActivity': AOS.appActivity,
+    'appium:appWaitActivity': '*',
+
+    'appium:noReset': true,
+    'appium:fullReset': false,
+    'appium:dontStopAppOnReset': true,
+    'appium:newCommandTimeout': AOS.newCommandTimeoutSec,
+    'appium:adbExecTimeout': AOS.adbExecTimeoutMs,
+    'appium:uiautomator2ServerLaunchTimeout': AOS.uia2LaunchTimeoutMs,
+    'appium:androidInstallTimeout': AOS.androidInstallTimeoutMs,
+    'appium:autoGrantPermissions': true,
+
+    // WebView-heavy perf tests use these by default.
+    'appium:autoWebview': false,
+    'appium:ensureWebviewsHavePages': true,
+    'appium:chromedriverAutodownload': true,
+    'appium:recreateChromeDriverSessions': true,
+    'appium:webviewDevtoolsPort': AOS.webviewDevtoolsPort,
+    'appium:chromedriverPorts': [8000, [9000, 9050]],
+  };
+
   return remote({
     hostname: AOS.host,
     port: AOS.port,
     path: AOS.path,
     logLevel: 'error',
-    capabilities: {
-      platformName: 'Android',
-      'appium:automationName': 'UiAutomator2',
-      'appium:udid': AOS.udid,
-      'appium:deviceName': AOS.udid,
-
-      'appium:appPackage': AOS.appPackage,
-      'appium:appActivity': AOS.appActivity,
-      'appium:appWaitActivity': '*',
-
-      'appium:noReset': true,
-      'appium:fullReset': false,
-      'appium:dontStopAppOnReset': true,
-      'appium:newCommandTimeout': AOS.newCommandTimeoutSec,
-      'appium:adbExecTimeout': AOS.adbExecTimeoutMs,
-      'appium:uiautomator2ServerLaunchTimeout': AOS.uia2LaunchTimeoutMs,
-      'appium:androidInstallTimeout': AOS.androidInstallTimeoutMs,
-      'appium:autoGrantPermissions': true,
-
-      // WebView-heavy perf tests use these by default.
-      'appium:autoWebview': false,
-      'appium:ensureWebviewsHavePages': true,
-      'appium:chromedriverAutodownload': true,
-      'appium:recreateChromeDriverSessions': true,
-      'appium:webviewDevtoolsPort': AOS.webviewDevtoolsPort,
-      'appium:chromedriverPorts': [8000, [9000, 9050]],
-    },
+    connectionRetryTimeout: AOS.connectionRetryTimeoutMs,
+    connectionRetryCount: AOS.connectionRetryCount,
+    capabilities,
   });
 }
 

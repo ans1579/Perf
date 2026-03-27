@@ -53,6 +53,7 @@ npm run report
 - `runPerfCase`는 케이스 1회 실행 + 메트릭 기록 담당
 - 배치(반복 실행) 마지막에 `finalizePerfBatch()`를 1회 호출해 요약 생성
 - 즉, 5회 반복이면 1~4회는 기록만 하고, 5회 종료 후 요약을 1번 생성
+- `runPerfBatch`를 사용하면 반복 실행 + 마지막 요약 생성을 한 번에 처리 가능
 
 ## 기본 패턴 예시
 ```ts
@@ -87,11 +88,46 @@ test('perf smoke', async () => {
 });
 ```
 
+## 배치 래퍼 예시 (권장)
+```ts
+import { test } from '@playwright/test';
+import { openDriver } from '../utils/appium';
+import { runPerfBatch, currentPlatform, defaultSamplers } from '../utils/perfRunner';
+
+test('perf batch', async () => {
+  const platform = currentPlatform();
+  const driver = await openDriver(platform);
+
+  try {
+    await runPerfBatch({
+      cases: [
+        {
+          platform,
+          deviceName: 'iPhone 16 Pro',
+          target: '자사앱',
+          caseNo: 1,
+          caseName: '홈 진입',
+          samplers: defaultSamplers(platform),
+          run: async () => {
+            await driver.pause(3000);
+          },
+        },
+      ],
+      continueOnError: false,
+      finalize: true,
+    });
+  } finally {
+    await driver.deleteSession();
+  }
+});
+```
+
 ## 환경 변수
 ### 공통
 - `PERF_PLATFORM`: `ios` 또는 `aos` (기본값 `ios`)
 - `PERF_SUMMARY_DEVICE_NAME`: summary 표기용 단말명 override
 - `PERF_SUMMARY_FORCE`: `1/true`면 변경 감지와 무관하게 summary 강제 재생성
+- `PERF_WRITE_METRICS_CSV`: `0/false`면 `metrics.csv` 기록 비활성화 (기본값 `1`)
 
 ### iOS (`utils/appium.ts`)
 - `IOS_APPIUM_HOST`, `IOS_APPIUM_PORT`, `IOS_APPIUM_PATH`
@@ -101,6 +137,8 @@ test('perf smoke', async () => {
 - `IOS_WDA_CONNECTION_TIMEOUT`
 - `IOS_WDA_STARTUP_RETRIES`
 - `IOS_WDA_STARTUP_RETRY_INTERVAL`
+- `IOS_WD_CONNECTION_RETRY_TIMEOUT`
+- `IOS_WD_CONNECTION_RETRY_COUNT`
 
 iOS 성능 샘플러(선택):
 - `IOS_MEMORY_CMD`
@@ -115,6 +153,8 @@ iOS 성능 샘플러(선택):
 - `AOS_UIA2_LAUNCH_TIMEOUT`
 - `AOS_ANDROID_INSTALL_TIMEOUT`
 - `AOS_WEBVIEW_DEVTOOLS_PORT`
+- `AOS_WD_CONNECTION_RETRY_TIMEOUT`
+- `AOS_WD_CONNECTION_RETRY_COUNT`
 
 ## 산출물 안내
 모든 산출물은 `test-output/perf-metrics`에 생성됩니다.

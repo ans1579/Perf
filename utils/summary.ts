@@ -59,9 +59,19 @@ const CASE_KEY_SEP = '\u0001';
 
 type SummaryMeta = {
   sourceStamp: string;
+  generatorStamp: string;
   generatedAt: string;
   device: string;
 };
+
+const GENERATOR_STAMP = (() => {
+  try {
+    const st = fs.statSync(__filename);
+    return `${path.basename(__filename)}:${Math.floor(st.mtimeMs)}`;
+  } catch {
+    return `${path.basename(__filename)}:unknown`;
+  }
+})();
 
 function escapeHtml(value: string): string {
   return value
@@ -185,9 +195,10 @@ function readSummaryMeta(): SummaryMeta | null {
   if (!fs.existsSync(SUMMARY_META)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(SUMMARY_META, 'utf8')) as Partial<SummaryMeta>;
-    if (!parsed || typeof parsed.sourceStamp !== 'string') return null;
+    if (!parsed || typeof parsed.sourceStamp !== 'string' || typeof parsed.generatorStamp !== 'string') return null;
     return {
       sourceStamp: parsed.sourceStamp,
+      generatorStamp: parsed.generatorStamp,
       generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : '',
       device: typeof parsed.device === 'string' ? parsed.device : '',
     };
@@ -1618,7 +1629,7 @@ export async function generateSummaryArtifacts(options: { force?: boolean } = {}
 
   if (!force && hasRequiredSummaryOutputs()) {
     const prev = readSummaryMeta();
-    if (prev?.sourceStamp === sourceStamp) return;
+    if (prev?.sourceStamp === sourceStamp && prev?.generatorStamp === GENERATOR_STAMP) return;
   }
 
   const allMetrics = readMetrics();
@@ -1630,20 +1641,29 @@ export async function generateSummaryArtifacts(options: { force?: boolean } = {}
   const rows = makeRows(cases, targets);
   const statRows = buildStatRows(metrics, targets);
 
+  let csvOk = false;
+  let rawOk = false;
+  let statsOk = false;
+  let htmlOk = false;
+  let pdfOk = false;
+
   try {
     writeSummaryCsv(device, rows, targets);
+    csvOk = true;
   } catch (e) {
     console.warn('[summary] summary.csv 생성 실패:', (e as Error).message);
   }
 
   try {
     writeSummaryRawCsv(device, rows, targets);
+    rawOk = true;
   } catch (e) {
     console.warn('[summary] summary_raw.csv 생성 실패:', (e as Error).message);
   }
 
   try {
     writeSummaryStatsCsv(device, statRows);
+    statsOk = true;
   } catch (e) {
     console.warn('[summary] summary_stats.csv 생성 실패:', (e as Error).message);
   }
@@ -1652,21 +1672,26 @@ export async function generateSummaryArtifacts(options: { force?: boolean } = {}
 
   try {
     writeSummaryHtml(device, rows, targets, statRows, metrics);
+    htmlOk = true;
   } catch (e) {
     console.warn('[summary] summary.html 생성 실패:', (e as Error).message);
   }
 
   try {
     await writeSummaryPdf();
+    pdfOk = true;
   } catch (e) {
     console.warn('[summary] summary.pdf 생성 실패:', (e as Error).message);
   }
 
-  try {
-    writeSummaryMeta({
-      sourceStamp,
-      generatedAt: new Date().toISOString(),
-      device,
-    });
-  } catch {}
+  if (csvOk && rawOk && statsOk && htmlOk && pdfOk) {
+    try {
+      writeSummaryMeta({
+        sourceStamp,
+        generatorStamp: GENERATOR_STAMP,
+        generatedAt: new Date().toISOString(),
+        device,
+      });
+    } catch {}
+  }
 }
