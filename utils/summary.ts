@@ -1693,6 +1693,11 @@ function buildTickIndexes(length: number): number[] {
     return [...new Set(points)];
 }
 
+function lineDashByIndex(index: number): string {
+    const patterns = ["", "7 4", "2 3", "10 4 2 4", "1 4"];
+    return patterns[index % patterns.length] ?? "";
+}
+
 function runTrendCard(
     metric: MetricKey,
     data: RunTrendMetricData | undefined,
@@ -1731,21 +1736,27 @@ function runTrendCard(
         .join("");
 
     const targetLines = targets
-        .map((t) => {
+        .map((t, idx) => {
             const arr = data.seriesByTarget[t] ?? [];
             if (arr.length <= 1) return "";
             const points = arr.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-            return `<polyline fill="none" stroke="${colorMap[t]}" stroke-width="2.2" points="${points}" />`;
+            const dash = lineDashByIndex(idx);
+            const dashAttr = dash ? ` stroke-dasharray="${dash}"` : "";
+            return `
+              <polyline fill="none" stroke="#ffffff" stroke-opacity="0.92" stroke-width="4.8" points="${points}" />
+              <polyline class="trend-line" fill="none" stroke="${colorMap[t]}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"${dashAttr} points="${points}" />
+            `;
         })
         .join("");
 
     const targetDots = targets
-        .map((t) => {
+        .map((t, idx) => {
             const arr = data.seriesByTarget[t] ?? [];
+            const r = 3.2 + (idx % 3) * 0.35;
             return arr
                 .map(
                     (v, i) =>
-                        `<circle class="trend-dot" cx="${x(i)}" cy="${y(v)}" r="3.2" fill="${colorMap[t]}" data-tip="${escapeHtml(
+                        `<circle class="trend-dot" cx="${x(i)}" cy="${y(v)}" r="${r.toFixed(2)}" fill="${colorMap[t]}" stroke="#ffffff" stroke-width="1.2" data-tip="${escapeHtml(
                             `${t} · ${i + 1}회차 · ${metricLabel(metric)}: ${format(round(v, 2))} ${metricUnit(metric)}`,
                         )}" />`,
                 )

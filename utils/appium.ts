@@ -39,8 +39,8 @@ export const tUniverse = `com.sktelecom.android.tuniverse`;
 export const tUAct = `com.sktelecom.android.tuniverse.ui.main.MainActivity`;
 // 마이케이티 - 안드로이드는 x
 // 유독(U+one)
-export const uPlusOne = `com.lgplus.mobile.cs`;
-export const u1Act = `com.lgplus.mobile.cs.activity.main.MainActivity`;
+export const uPlusOne = `com.lguplus.mobile.cs`;
+export const u1Act = `com.lguplus.mobile.cs.activity.main.MainActivity`;
 
 export const AOS = {
     host: process.env.AOS_APPIUM_HOST ?? "127.0.0.1",

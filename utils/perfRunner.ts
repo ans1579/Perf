@@ -32,7 +32,13 @@ type RunPerfOptions = {
     beforeRun?: () => Promise<void>;
     // 측정 종료 후 실행되는 정리 동작(측정 구간 제외)
     afterRun?: () => Promise<void>;
-    samplers: PerfSamplers;
+    // 공통 sampler 위에 케이스별 커스텀 sampler를 덮어쓸 때 사용
+    samplers?: PerfSamplers;
+    // AOS 공통 sampler 생성 시 사용할 앱 패키지/UDID (케이스별 앱 측정용)
+    samplerAppPackage?: string;
+    samplerUdid?: string;
+    // no process found 시 memory를 0으로 볼지 여부 (기본 true)
+    noProcessMemoryAsZero?: boolean;
     run: () => Promise<void>;
 };
 
@@ -43,6 +49,12 @@ type RunPerfBatchOptions = {
     forceSummary?: boolean;
     // true면 같은 case/target 조합의 첫 실행은 워밍업으로 소모
     warmupPerCase?: boolean;
+};
+
+type AosSamplerOptions = {
+    udid?: string;
+    appPackage?: string;
+    noProcessMemoryAsZero?: boolean;
 };
 
 const execAsync = promisify(exec);
@@ -150,6 +162,28 @@ function composeWarmupKey(options: RunPerfOptions): string {
     ].join("::");
 }
 
+function mergeSamplers(base: PerfSamplers, override?: PerfSamplers): PerfSamplers {
+    return {
+        memory: override?.memory ?? base.memory,
+        cpu: override?.cpu ?? base.cpu,
+        current: override?.current ?? base.current,
+    };
+}
+
+function resolveSamplers(options: RunPerfOptions): PerfSamplers {
+    if (options.platform === "aos") {
+        const base = createAosSamplers({
+            udid: options.samplerUdid,
+            appPackage: options.samplerAppPackage,
+            noProcessMemoryAsZero: options.noProcessMemoryAsZero,
+        });
+        return mergeSamplers(base, options.samplers);
+    }
+
+    const base = createIosSamplers();
+    return mergeSamplers(base, options.samplers);
+}
+
 export async function runPerfCase(options: RunPerfOptions) {
     const {
         platform,
@@ -160,9 +194,9 @@ export async function runPerfCase(options: RunPerfOptions) {
         run,
         beforeRun,
         afterRun,
-        samplers,
         writeSummary = true,
     } = options;
+    const samplers = resolveSamplers(options);
     const sampleMs = options.sampleMs ?? 1500;
     const caseKey = toCaseKey(caseNo, caseName);
     const warmupRuns = intOption(options.warmupRuns, "PERF_WARMUP_RUNS", 0);
@@ -435,9 +469,14 @@ function normalizeCurrentToMilliAmpSigned(raw: number): number {
     return Number((milliAmp * sign).toFixed(2));
 }
 
-export function createAosSamplers(): PerfSamplers {
-    const udid = AOS.udid;
-    const pkg = AOS.appPackage;
+export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers {
+    const udid = options.udid ?? AOS.udid;
+    const pkg = options.appPackage ?? AOS.appPackage;
+    const noProcessMemoryAsZero = options.noProcessMemoryAsZero ?? true;
+    // 기본값: 앱 코어합 CPU를 단말 전체 기준(0~100%)으로 정규화
+    const normalizeCpuByCores = !/^(0|false|no|off)$/i.test(
+        String(process.env.PERF_CPU_NORMALIZE_BY_CORES ?? "1").trim(),
+    );
     const allowChargingCurrent = !/^(0|false|no|off)$/i.test(
         String(
             process.env.PERF_CURRENT_MEASURE_WHILE_CHARGING ?? "1",
@@ -445,6 +484,7 @@ export function createAosSamplers(): PerfSamplers {
     );
     let cachedCharging = false;
     let cachedChargingCheckedAt = 0;
+    let cachedCpuCores: number | null = null;
 
     const isCharging = async (): Promise<boolean> => {
         const now = Date.now();
@@ -462,24 +502,88 @@ export function createAosSamplers(): PerfSamplers {
         return cachedCharging;
     };
 
+    const getCpuCores = async (): Promise<number> => {
+        if (cachedCpuCores !== null) return cachedCpuCores;
+        const out = await execText(
+            `adb -s ${udid} shell "nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1"`,
+        );
+        const cores = out === null ? null : toNumber(out);
+        const asInt = cores === null ? 1 : Math.max(1, Math.trunc(cores));
+        cachedCpuCores = asInt;
+        return asInt;
+    };
+
+    const normalizeCpu = async (raw: number): Promise<number> => {
+        if (!normalizeCpuByCores) return Number(raw.toFixed(2));
+        const cores = await getCpuCores();
+        // top 기준 앱 코어합(%core)을 단말 전체 기준(%)으로 변환
+        const normalized = raw / cores;
+        return Number(Math.max(0, Math.min(100, normalized)).toFixed(2));
+    };
+
     const memory: Sampler = async () => {
         const out = await execText(
             `adb -s ${udid} shell dumpsys meminfo ${pkg}`,
         );
         if (out === null) return null;
+        if (/no process found/i.test(out)) {
+            return noProcessMemoryAsZero ? 0 : null;
+        }
         const pssKb =
             toNumber(out.match(/TOTAL\s+PSS:\s+(\d+)/)?.[1] ?? "") ??
+            toNumber(
+                (out.match(/TOTAL PSS:\s*([\d,]+)/i)?.[1] ?? "").replace(
+                    /,/g,
+                    "",
+                ),
+            ) ??
             toNumber(out.match(/\bTOTAL\b\s+(\d+)\s+/m)?.[1] ?? "");
         return pssKb === null ? null : Number((pssKb / 1024).toFixed(2));
     };
 
     const cpu: Sampler = async () => {
-        const out = await execText(
-            `adb -s ${udid} shell dumpsys cpuinfo ${pkg}`,
+        // 1) top에서 앱 프로세스 라인 집계 (단말별로 가장 안정적)
+        const topOut = await execText(
+            `adb -s ${udid} shell "top -n 1 -b -o %CPU,ARGS | grep '${pkg}' || true"`,
         );
-        if (out === null) return null;
-        const percent = toNumber(out.match(/([\d.]+)%/m)?.[1] ?? "");
-        return percent === null ? null : Number(percent.toFixed(2));
+        if (topOut) {
+            let total = 0;
+            let matched = 0;
+            for (const line of topOut.split("\n")) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                const m = trimmed.match(/^([\d.]+)\s+(\S+)/);
+                if (!m) continue;
+                const cpu = Number(m[1]);
+                const args = m[2];
+                if (!Number.isFinite(cpu)) continue;
+                if (args === pkg || args.startsWith(`${pkg}:`)) {
+                    total += cpu;
+                    matched += 1;
+                }
+            }
+            if (matched > 0) return normalizeCpu(total);
+        }
+
+        // 2) fallback: dumpsys cpuinfo에서 앱 라인 집계
+        const out = await execText(
+            `adb -s ${udid} shell "dumpsys cpuinfo | grep '${pkg}' || true"`,
+        );
+        if (out) {
+            let total = 0;
+            let matched = 0;
+            for (const line of out.split("\n")) {
+                const pct = toNumber(line.match(/([\d.]+)%/)?.[1] ?? "");
+                if (pct !== null) {
+                    total += pct;
+                    matched += 1;
+                }
+            }
+            if (matched > 0) return normalizeCpu(total);
+        }
+
+        // CPU 라인 미검출 시에도 지표 누락 방지를 위해 0 반환
+        return 0;
     };
 
     const current: Sampler = async () => {
@@ -549,8 +653,13 @@ export function currentPlatform(): PerfPlatform {
     return p === "aos" ? "aos" : "ios";
 }
 
-export function defaultSamplers(platform: PerfPlatform): PerfSamplers {
-    return platform === "aos" ? createAosSamplers() : createIosSamplers();
+export function defaultSamplers(
+    platform: PerfPlatform,
+    options?: AosSamplerOptions,
+): PerfSamplers {
+    return platform === "aos"
+        ? createAosSamplers(options)
+        : createIosSamplers();
 }
 
 export function targetAppId(platform: PerfPlatform): string {
