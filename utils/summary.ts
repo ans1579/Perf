@@ -1998,7 +1998,7 @@ function writeSummaryHtml(
     .reliability-note.muted { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
     .section-title { margin: 18px 0 8px; font-size: 14px; color: #334155; }
     .section-desc { margin: -2px 0 10px; color: #64748b; font-size: 12px; line-height: 1.45; }
-    .table-wrap { overflow-x: auto; border-radius: 14px; }
+    .table-wrap { overflow-x: auto; border-radius: 14px; max-width: 100%; }
     tr:last-child td { border-bottom: none; }
     .empty { font-size: 13px; color: var(--muted); padding: 12px 0; }
     @media print {
@@ -2007,6 +2007,19 @@ function writeSummaryHtml(
       .fab-actions { display: none !important; }
       .head, .card, .trend-card, .panel, table { box-shadow: none; break-inside: avoid; }
       .section-title { margin-top: 12px; }
+      .table-wrap { overflow: visible !important; }
+      table.case-avg-table { width: 100% !important; table-layout: fixed; }
+      table.case-avg-table th, table.case-avg-table td {
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        font-size: 10.5px;
+        padding: 8px 6px;
+      }
+      table.case-avg-table th:nth-child(1), table.case-avg-table td:nth-child(1) { width: 9%; }
+      table.case-avg-table th:nth-child(2), table.case-avg-table td:nth-child(2) { width: 15%; }
+      table.case-avg-table th:nth-child(3), table.case-avg-table td:nth-child(3) { width: 17%; }
+      table.case-avg-table .metric-chip { font-size: 10px; padding: 1px 6px; white-space: normal; }
     }
     @media (max-width: 1024px) {
       .cards { grid-template-columns: 1fr 1fr; }
@@ -2064,7 +2077,7 @@ function writeSummaryHtml(
     <div class="section-desc">p5/p95는 극단값 영향을 줄인 분포 지표입니다. 반복횟수(n)가 많을수록 신뢰도가 높습니다.</div>
     <div class="reliability-note ${reliability.tone}">반복 신뢰도: <strong>${reliability.label}</strong> · ${reliability.detail}</div>
     <div class="table-wrap">
-      <table>
+      <table class="stats-table">
         <thead>
           <tr>
             <th>번호</th>
@@ -2089,7 +2102,7 @@ function writeSummaryHtml(
     <h2 class="section-title">케이스별 반복 평균 표</h2>
     <div class="section-desc">각 케이스의 반복 평균 측정값을 표로 확인합니다. 보고서 공유/검토 시 기준표 용도입니다.</div>
     <div class="table-wrap">
-      <table>
+      <table class="case-avg-table">
         <thead>
           <tr>
             <th>번호</th>
