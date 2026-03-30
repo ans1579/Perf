@@ -1217,7 +1217,10 @@ function metricAverages(
 }
 
 type MetricAveragesMap = Record<MetricKey, Record<string, number | null>>;
-type MetricRankMap = Record<MetricKey, Array<{ target: string; value: number }>>;
+type MetricRankMap = Record<
+    MetricKey,
+    Array<{ target: string; value: number }>
+>;
 
 function buildMetricAveragesMap(
     rows: CompareRow[],
@@ -2212,7 +2215,13 @@ export async function generateSummaryArtifacts(
     // XLSX 생성은 현재 비활성화 상태입니다.
 
     try {
-        htmlChanged = writeSummaryHtml(device, rows, targets, statRows, metrics);
+        htmlChanged = writeSummaryHtml(
+            device,
+            rows,
+            targets,
+            statRows,
+            metrics,
+        );
         htmlOk = true;
     } catch (e) {
         console.warn("[summary] summary.html 생성 실패:", (e as Error).message);
