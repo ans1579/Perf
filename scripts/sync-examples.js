@@ -1,8 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { resolveLatestPerfDir } = require('./_output-dir');
 
 const root = path.resolve(__dirname, '..');
-const srcDir = path.join(root, 'test-output', 'perf-metrics');
+const perfRootDir = path.join(root, 'test-output', 'perf-metrics');
+const srcDir = resolveLatestPerfDir(perfRootDir);
 const dstDir = path.join(root, 'examples');
 
 const mappings = [
@@ -65,3 +67,4 @@ if (missing > 0) {
 }
 
 console.log(`[sync-examples] done: updated=${updated}, skipped=${skipped}, missing=${missing}`);
+console.log(`[sync-examples] source: ${srcDir}`);

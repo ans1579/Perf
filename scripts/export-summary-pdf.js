@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
+const { resolveLatestPerfDir } = require('./_output-dir');
 
 function isTruthy(value) {
   return /^(1|true|yes|y|on)$/i.test(String(value ?? '').trim());
@@ -29,9 +30,12 @@ function isUpToDate(inputHtml, outputPdf) {
 }
 
 async function generateSummaryPdf(options = {}) {
-  const cwd = options.cwd ?? process.cwd();
-  const defaultHtml = path.resolve(cwd, 'test-output', 'perf-metrics', 'summary.html');
-  const defaultPdf = path.resolve(cwd, 'test-output', 'perf-metrics', 'summary.pdf');
+  const projectRoot = path.resolve(__dirname, '..');
+  const cwd = options.cwd ?? projectRoot;
+  const rootDir = path.resolve(cwd, 'test-output', 'perf-metrics');
+  const latestDir = resolveLatestPerfDir(rootDir, options.runId);
+  const defaultHtml = path.resolve(latestDir, 'summary.html');
+  const defaultPdf = path.resolve(latestDir, 'summary.pdf');
   const force = options.force === true || isTruthy(process.env.PERF_PDF_FORCE);
   const parsedTimeout = Number(options.navTimeoutMs ?? process.env.PERF_PDF_NAV_TIMEOUT_MS ?? 30000);
   const navTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30000;

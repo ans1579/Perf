@@ -4,10 +4,13 @@ const http = require('node:http');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { generateSummaryPdf } = require('./export-summary-pdf');
+const { resolveLatestPerfDir } = require('./_output-dir');
 
 const host = process.env.PERF_REPORT_HOST ?? '127.0.0.1';
 const port = Number(process.env.PERF_REPORT_PORT ?? 9324);
-const baseDir = path.resolve(process.cwd(), 'test-output', 'perf-metrics');
+const projectRoot = path.resolve(__dirname, '..');
+const rootDir = path.resolve(projectRoot, 'test-output', 'perf-metrics');
+const baseDir = resolveLatestPerfDir(rootDir);
 let inFlightPdfJob = null;
 
 function isTruthy(value) {
@@ -110,7 +113,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${hostHeader}`);
 
   if (url.pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, baseDir });
+    sendJson(res, 200, { ok: true, rootDir, baseDir });
     return;
   }
 
@@ -143,6 +146,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   console.log(`[report-server] listening: http://${host}:${port}`);
+  console.log(`[report-server] root dir: ${rootDir}`);
   console.log(`[report-server] base dir: ${baseDir}`);
 });
 

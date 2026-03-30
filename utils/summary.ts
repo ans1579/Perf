@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import type { PerfPlatform } from "./appium";
+import {
+    getPerfOutDir,
+    markPerfRunAsLatest,
+    syncLatestArtifactsToRoot,
+} from "./outputPath";
 
 type MetricCategory = "e2e" | "memory" | "cpu" | "current";
 
@@ -47,7 +52,7 @@ type StatRow = {
     max: number | null;
 };
 
-const OUT_DIR = path.join(process.cwd(), "test-output", "perf-metrics");
+const OUT_DIR = getPerfOutDir();
 const JSONL_PATH = path.join(OUT_DIR, "metrics.jsonl");
 const SUMMARY_CSV = path.join(OUT_DIR, "summary.csv");
 const SUMMARY_RAW_CSV = path.join(OUT_DIR, "summary_raw.csv");
@@ -248,11 +253,6 @@ function hasRequiredSummaryOutputs(): boolean {
     ].every((f) => fs.existsSync(f));
 }
 
-function setLatest(target: CaseByTarget, key: keyof CaseByTarget, next: Point) {
-    const prev = target[key];
-    if (!prev || next.ts >= prev.ts) target[key] = next;
-}
-
 function collectTargetOrder(metrics: MetricLine[]): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -269,7 +269,8 @@ function buildCases(metrics: MetricLine[]): {
     cases: Map<string, CaseBucket>;
     targets: string[];
 } {
-    const cases = new Map<string, CaseBucket>();
+    type MetricSamples = Record<MetricKey, number[]>;
+    const grouped = new Map<string, Map<string, MetricSamples>>();
     const targets = collectTargetOrder(metrics);
 
     for (const m of metrics) {
@@ -280,20 +281,48 @@ function buildCases(metrics: MetricLine[]): {
 
         const { caseNo, caseName, suffix } = parsed;
         const caseKey = makeCaseKey(caseNo, caseName);
-        const byTarget = cases.get(caseKey) ?? new Map<string, CaseByTarget>();
-        const bucket = byTarget.get(m.target) ?? {};
-        const p: Point = { value, ts: toEpoch(m.ts) };
+        const byTarget = grouped.get(caseKey) ?? new Map<string, MetricSamples>();
+        const samples = byTarget.get(m.target) ?? {
+            e2eMs: [],
+            memoryDeltaMB: [],
+            cpuAvgPct: [],
+            currentAvgmA: [],
+        };
 
-        if (m.category === "e2e" && suffix === "duration")
-            setLatest(bucket, "e2eMs", p);
+        if (m.category === "e2e" && suffix === "duration") samples.e2eMs.push(value);
         if (m.category === "memory" && suffix === "delta")
-            setLatest(bucket, "memoryDeltaMB", p);
-        if (m.category === "cpu" && suffix === "avg")
-            setLatest(bucket, "cpuAvgPct", p);
+            samples.memoryDeltaMB.push(value);
+        if (m.category === "cpu" && suffix === "avg") samples.cpuAvgPct.push(value);
         if (m.category === "current" && suffix === "avg")
-            setLatest(bucket, "currentAvgmA", p);
+            samples.currentAvgmA.push(value);
 
-        byTarget.set(m.target, bucket);
+        byTarget.set(m.target, samples);
+        grouped.set(caseKey, byTarget);
+    }
+
+    const cases = new Map<string, CaseBucket>();
+    for (const [caseKey, byTargetSamples] of grouped.entries()) {
+        const byTarget = new Map<string, CaseByTarget>();
+
+        for (const [target, samples] of byTargetSamples.entries()) {
+            const bucket: CaseByTarget = {};
+            const now = Date.now();
+
+            const e2eAvg = avg(samples.e2eMs);
+            if (e2eAvg !== null) bucket.e2eMs = { value: e2eAvg, ts: now };
+
+            const memAvg = avg(samples.memoryDeltaMB);
+            if (memAvg !== null) bucket.memoryDeltaMB = { value: memAvg, ts: now };
+
+            const cpuAvg = avg(samples.cpuAvgPct);
+            if (cpuAvg !== null) bucket.cpuAvgPct = { value: cpuAvg, ts: now };
+
+            const currentAvg = avg(samples.currentAvgmA);
+            if (currentAvg !== null) bucket.currentAvgmA = { value: currentAvg, ts: now };
+
+            byTarget.set(target, bucket);
+        }
+
         cases.set(caseKey, byTarget);
     }
 
@@ -528,7 +557,7 @@ function writeSummaryCsv(
     }
     lines.push([]);
 
-    lines.push(["section", "2) 케이스별 스냅샷 비교 (낮을수록 우수)"]);
+    lines.push(["section", "2) 케이스별 반복 평균 비교 (낮을수록 우수)"]);
     lines.push([
         "번호",
         "케이스",
@@ -1804,7 +1833,7 @@ function writeSummaryHtml(
         .join("");
     const tableRows =
         rows.length === 0
-            ? `<tr><td colspan="${3 + targetList.length}">최신 스냅샷 데이터가 없습니다.</td></tr>`
+            ? `<tr><td colspan="${3 + targetList.length}">반복 평균 데이터가 없습니다.</td></tr>`
             : rows
                   .map((r) => {
                       const nums = targetList
@@ -2003,7 +2032,7 @@ function writeSummaryHtml(
     ${insightHtml}
 
     <h2 class="section-title">반복 회차 추이</h2>
-    <div class="section-desc">각 지표별로 대표 케이스 1개를 선택해 회차(1~N) 추이를 보여줍니다. 스냅샷 표와 역할이 다릅니다.</div>
+    <div class="section-desc">각 지표별로 대표 케이스 1개를 선택해 회차(1~N) 추이를 보여줍니다. 아래 평균 비교 섹션과 역할이 다릅니다.</div>
     <div class="trend-grid">
       ${runTrendCard("e2eMs", runTrends.e2eMs, targetList, c)}
       ${runTrendCard("memoryDeltaMB", runTrends.memoryDeltaMB, targetList, c)}
@@ -2011,8 +2040,8 @@ function writeSummaryHtml(
       ${runTrendCard("currentAvgmA", runTrends.currentAvgmA, targetList, c)}
     </div>
 
-    <h2 class="section-title">케이스별 스냅샷 비교</h2>
-    <div class="section-desc">같은 케이스에서 앱별 최신 값을 막대로 비교합니다. 값이 낮을수록 우수입니다.</div>
+    <h2 class="section-title">케이스별 반복 평균 비교</h2>
+    <div class="section-desc">같은 케이스에서 앱별 반복 평균 값을 막대로 비교합니다. 값이 낮을수록 우수입니다.</div>
     <div class="panels">
       ${panel("e2eMs", rows, targetList, c, ranges)}
       ${panel("memoryDeltaMB", rows, targetList, c, ranges)}
@@ -2046,8 +2075,8 @@ function writeSummaryHtml(
       </table>
     </div>
 
-    <h2 class="section-title">최신 스냅샷 비교</h2>
-    <div class="section-desc">각 케이스의 최신 측정값을 표로 확인합니다. 보고서 공유/검토 시 원문 데이터 용도입니다.</div>
+    <h2 class="section-title">케이스별 반복 평균 표</h2>
+    <div class="section-desc">각 케이스의 반복 평균 측정값을 표로 확인합니다. 보고서 공유/검토 시 기준표 용도입니다.</div>
     <div class="table-wrap">
       <table>
         <thead>
@@ -2250,6 +2279,25 @@ export async function generateSummaryArtifacts(
         } catch (e) {
             console.warn(
                 "[summary] summary.meta.json 생성 실패:",
+                (e as Error).message,
+            );
+        }
+    }
+
+    if (htmlOk) {
+        try {
+            markPerfRunAsLatest();
+        } catch (e) {
+            console.warn(
+                "[summary] latest-run.json 갱신 실패:",
+                (e as Error).message,
+            );
+        }
+        try {
+            syncLatestArtifactsToRoot();
+        } catch (e) {
+            console.warn(
+                "[summary] 루트 최신 산출물 동기화 실패:",
                 (e as Error).message,
             );
         }

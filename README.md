@@ -139,10 +139,17 @@ test('perf batch', async () => {
 - `PERF_METRICS_FLUSH_LINES`: 버퍼 모드에서 중간 flush 라인 수(기본값 `25`)
 - `PERF_PDF_FORCE`: `1/true`면 PDF 최신 여부와 무관하게 강제 재생성
 - `PERF_PDF_NAV_TIMEOUT_MS`: PDF 렌더링 시 `summary.html` 로드 타임아웃(ms)
+- `PERF_RUN_ID`: 실행 폴더명을 직접 지정(권장)
+- `PERF_CAMPAIGN_ID`: `PERF_RUN_ID` 별칭(동일 의미)
+- `PERF_RUN_LABEL`: 자동 생성 폴더명에 붙는 캠페인/테스트 라벨
+- `PERF_RUN_DEVICE`: 자동 생성 폴더명에 붙는 단말 라벨(선택)
 - `PERF_WARMUP_RUNS`: `runPerfCase` 워밍업 횟수(기본값 `0`)
 - `PERF_SAMPLE_GATE_RETRIES`: 샘플 최소치 미달 시 재시도 횟수(기본값 `1`)
 - `PERF_MIN_CPU_SAMPLES`: CPU 최소 샘플 수(기본값 `2`)
 - `PERF_MIN_CURRENT_SAMPLES`: Current 최소 샘플 수(기본값 `4`)
+- `PERF_SAMPLE_GATE_STRICT`: `1/true`면 샘플 게이트 미달 시 테스트 실패(기본은 완화 모드: 결과 생성 우선)
+- `PERF_CURRENT_MEASURE_WHILE_CHARGING`: 충전 중 current 수집 허용 여부(기본값 `1`, 끄려면 `0/false`)
+  - `1`일 때도 소모 전류 기준을 유지하기 위해 충전 유입 전류(양수)는 `0mA`로 기록
 
 ### iOS (`utils/appium.ts`)
 - `IOS_APPIUM_HOST`, `IOS_APPIUM_PORT`, `IOS_APPIUM_PATH`
@@ -180,8 +187,20 @@ Android current 수집 동작:
 - 수집값 부호를 해석해 방전 전류만 `mA`로 반영
 
 ## 산출물 안내
-모든 산출물은 `test-output/perf-metrics`에 생성됩니다.
+실행마다 고유 폴더가 생성됩니다.
 
+- 루트: `test-output/perf-metrics`
+- 실행 폴더(자동): `test-output/perf-metrics/YYYYMMDD-HHmm-캠페인명-단말`
+- 자동 이름 충돌 시: `...-r2`, `...-r3` 형태로 분기
+- 실행 폴더(고정): `PERF_RUN_ID=<원하는이름>`으로 직접 지정
+- 최신 실행 포인터: `test-output/perf-metrics/latest-run.json`
+- 고정 최신 경로: `test-output/perf-metrics/latest/summary.html`
+
+참고:
+- 최신 산출물은 `latest/`에만 동기화됩니다.
+- 루트(`perf-metrics`)는 실행 폴더 + `latest-run.json` 인덱스만 유지합니다.
+
+각 실행 폴더 내부 산출물:
 - `metrics.jsonl`: 원본 이벤트 로그(라인 단위 JSON)
 - `metrics.csv`: 원본 CSV
 - `summary.csv`: 사람용 요약 CSV
@@ -199,9 +218,17 @@ Android current 수집 동작:
 - 권장 반복 수: 최소 3회, 권장 5~10회
 
 ## 문제 해결 가이드
+- 서로 다른 앱 테스트(예: 3개 앱)를 한 페이지에서 비교하고 싶으면:
+  - 3개 테스트를 모두 **같은 `PERF_RUN_ID`** 로 실행
+  - 그러면 동일 폴더에 누적되어 하나의 `summary.html`에서 비교 가능
+  - `PERF_RUN_LABEL`/`PERF_RUN_DEVICE` 자동 방식은 실행별 고유 폴더용(비교 누적용 아님)
+  - 예시:
+    - `PERF_RUN_ID=20260330-1400-앱3종비교 npm run test:aos -- tests/appA.spec.ts`
+    - `PERF_RUN_ID=20260330-1400-앱3종비교 npm run test:aos -- tests/appB.spec.ts`
+    - `PERF_RUN_ID=20260330-1400-앱3종비교 npm run test:aos -- tests/appC.spec.ts`
 - summary 파일이 안 생기면:
   - `runPerfCase` 이후 `finalizePerfBatch()` 호출 여부 확인
-  - `test-output/perf-metrics/metrics.jsonl` 생성 여부 확인
+  - 최신 실행 폴더의 `metrics.jsonl` 생성 여부 확인
 - summary가 갱신되지 않는 것 같으면:
   - `PERF_SUMMARY_FORCE=1 npm test`로 강제 재생성 확인
 - PDF가 없으면:

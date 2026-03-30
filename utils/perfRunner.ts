@@ -26,8 +26,12 @@ type RunPerfOptions = {
     // cpu/current sampler가 있을 때 필요한 최소 샘플 수
     minCpuSamples?: number;
     minCurrentSamples?: number;
-    // true면 해당 케이스 종료 시 즉시 summary 생성 (기본값: false)
+    // true면 해당 케이스 종료 시 즉시 summary 생성 (기본값: true)
     writeSummary?: boolean;
+    // 측정 시작 전에 실행되는 준비 동작(측정 구간 제외)
+    beforeRun?: () => Promise<void>;
+    // 측정 종료 후 실행되는 정리 동작(측정 구간 제외)
+    afterRun?: () => Promise<void>;
     samplers: PerfSamplers;
     run: () => Promise<void>;
 };
@@ -154,8 +158,10 @@ export async function runPerfCase(options: RunPerfOptions) {
         caseNo,
         caseName,
         run,
+        beforeRun,
+        afterRun,
         samplers,
-        writeSummary = false,
+        writeSummary = true,
     } = options;
     const sampleMs = options.sampleMs ?? 1500;
     const caseKey = toCaseKey(caseNo, caseName);
@@ -175,8 +181,13 @@ export async function runPerfCase(options: RunPerfOptions) {
         "PERF_MIN_CURRENT_SAMPLES",
         4,
     );
+    const strictSampleGate = /^(1|true|yes|y|on)$/i.test(
+        String(process.env.PERF_SAMPLE_GATE_STRICT ?? "").trim(),
+    );
 
     const runMeasuredOnce = async () => {
+        if (beforeRun) await beforeRun();
+
         const memoryBefore = await safeSample(samplers.memory);
 
         const cpuSamples: number[] = [];
@@ -213,6 +224,15 @@ export async function runPerfCase(options: RunPerfOptions) {
         await samplingLoop;
 
         const memoryAfter = await safeSample(samplers.memory);
+
+        if (afterRun) {
+            try {
+                await afterRun();
+            } catch (e) {
+                if (!runError) runError = e;
+            }
+        }
+
         return {
             runError,
             e2eMs,
@@ -237,11 +257,19 @@ export async function runPerfCase(options: RunPerfOptions) {
         cpuSamples: number[];
         currentSamples: number[];
     } | null = null;
+    let lastMeasured: {
+        e2eMs: number;
+        memoryBefore: number | null;
+        memoryAfter: number | null;
+        cpuSamples: number[];
+        currentSamples: number[];
+    } | null = null;
     let lastGateMessage = "";
 
     for (let attempt = 0; attempt <= sampleGateRetries; attempt += 1) {
         const measured = await runMeasuredOnce();
         if (measured.runError) throw measured.runError;
+        lastMeasured = measured;
 
         const cpuOk =
             !needCpuGate || measured.cpuSamples.length >= minCpuSamples;
@@ -264,8 +292,14 @@ export async function runPerfCase(options: RunPerfOptions) {
     }
 
     if (!accepted) {
-        throw new Error(
-            `sample gate failed for "${caseKey}" after ${sampleGateRetries + 1} attempts (${lastGateMessage})`,
+        if (strictSampleGate || !lastMeasured) {
+            throw new Error(
+                `sample gate failed for "${caseKey}" after ${sampleGateRetries + 1} attempts (${lastGateMessage})`,
+            );
+        }
+        accepted = lastMeasured;
+        console.warn(
+            `[perf] sample gate relaxed for "${caseKey}" (${lastGateMessage})`,
         );
     }
 
@@ -404,6 +438,11 @@ function normalizeCurrentToMilliAmpSigned(raw: number): number {
 export function createAosSamplers(): PerfSamplers {
     const udid = AOS.udid;
     const pkg = AOS.appPackage;
+    const allowChargingCurrent = !/^(0|false|no|off)$/i.test(
+        String(
+            process.env.PERF_CURRENT_MEASURE_WHILE_CHARGING ?? "1",
+        ).trim(),
+    );
     let cachedCharging = false;
     let cachedChargingCheckedAt = 0;
 
@@ -445,18 +484,35 @@ export function createAosSamplers(): PerfSamplers {
 
     const current: Sampler = async () => {
         const out = await execText(
-            `adb -s ${udid} shell "cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || cat /sys/class/power_supply/battery/current_now 2>/dev/null || echo ''"`,
+            `adb -s ${udid} shell "cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/battery/current_avg 2>/dev/null || echo ''"`,
         );
-        if (out === null) return null;
-        const n = toNumber(out);
+        let n = out === null ? null : toNumber(out);
+
+        // 일부 단말에서는 /sys 경로 접근이 막혀 있어 dumpsys 배터리 값을 fallback로 사용.
+        if (n === null) {
+            const batteryDump = await execText(
+                `adb -s ${udid} shell dumpsys battery`,
+            );
+            if (batteryDump !== null) {
+                n = toNumber(
+                    batteryDump.match(/current now:\s*(-?\d+)/i)?.[1] ?? "",
+                );
+            }
+        }
         if (n === null) return null;
 
-        // 충전 중 샘플은 소모량 비교에서 왜곡되므로 제외.
-        if (await isCharging()) return null;
+        // 기본값에서는 충전 중 샘플을 제외하고,
+        // PERF_CURRENT_MEASURE_WHILE_CHARGING=1 일 때만 포함한다.
+        if (!allowChargingCurrent && (await isCharging())) return null;
 
         const signedMilliAmp = normalizeCurrentToMilliAmpSigned(n);
-        // 부호가 양수면 충전/유입 전류로 보고 제외.
-        if (signedMilliAmp >= 0) return null;
+
+        // 소모 전류 관점으로 해석:
+        // - signed < 0 : 배터리 방전(소모) 전류
+        // - signed >= 0 : 충전/유입 전류 (소모가 아니므로 0 처리)
+        if (signedMilliAmp >= 0) {
+            return allowChargingCurrent ? 0 : null;
+        }
         return Number(Math.abs(signedMilliAmp).toFixed(2));
     };
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getPerfOutDir } from "./outputPath";
 
 export type PerfMetric = {
     category: "e2e" | "memory" | "cpu" | "power" | "current";
@@ -12,7 +13,7 @@ export type PerfMetric = {
     ts: string;
 };
 
-const OUT_DIR = path.join(process.cwd(), "test-output", "perf-metrics");
+const OUT_DIR = getPerfOutDir();
 const JSONL_PATH = path.join(OUT_DIR, "metrics.jsonl");
 const CSV_PATH = path.join(OUT_DIR, "metrics.csv");
 const CSV_HEADER = "category,platform,device,target,name,value,unit,ts\n";
