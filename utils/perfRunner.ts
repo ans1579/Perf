@@ -8,6 +8,9 @@ import { AOS, IOS, type PerfPlatform } from "./appium";
 import { flushMetrics, nowIso, writeMetric } from "./metric";
 import { generateSummaryArtifacts } from "./summary";
 
+// -----------------------------------------------------------------------------
+// 공통 타입 / 옵션
+// -----------------------------------------------------------------------------
 type Sampler = () => Promise<number | null>;
 
 type PerfSamplers = {
@@ -74,6 +77,9 @@ type IosSamplerOptions = {
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+// -----------------------------------------------------------------------------
+// 공통 유틸
+// -----------------------------------------------------------------------------
 async function sleepInterruptible(ms: number, signal: AbortSignal) {
     if (ms <= 0 || signal.aborted) return;
     await new Promise<void>((resolve) => {
@@ -198,6 +204,9 @@ function resolveSamplers(options: RunPerfOptions): PerfSamplers {
     return mergeSamplers(base, options.samplers);
 }
 
+// -----------------------------------------------------------------------------
+// 공통 실행 엔진 (runPerfCase / runPerfBatch)
+// -----------------------------------------------------------------------------
 export async function runPerfCase(options: RunPerfOptions) {
     const { platform, deviceName, target, caseNo, caseName, run, beforeRun, afterRun, writeSummary = true } = options;
     const samplers = resolveSamplers(options);
@@ -469,6 +478,9 @@ function normalizeCurrentToMilliAmpSigned(raw: number): number {
     return Number((milliAmp * sign).toFixed(2));
 }
 
+// -----------------------------------------------------------------------------
+// AOS 샘플러
+// -----------------------------------------------------------------------------
 export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers {
     const udid = options.udid ?? AOS.udid;
     const pkg = options.appPackage ?? AOS.appPackage;
@@ -568,6 +580,7 @@ export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers
         return Number(Math.max(0, Math.min(100, pct)).toFixed(2));
     };
 
+    // memory(MB): dumpsys meminfo 기반
     const memory: Sampler = async () => {
         const out = await execText(`adb -s ${udid} shell "dumpsys meminfo ${pkg} 2>/dev/null | grep -E 'No process found|TOTAL PSS:|TOTAL:' || true"`);
         if (out === null) return null;
@@ -578,6 +591,7 @@ export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers
         return pssKb === null ? null : Number((pssKb / 1024).toFixed(2));
     };
 
+    // cpu(%): /proc delta -> dumpsys cpuinfo -> top 순으로 fallback
     const cpu: Sampler = async () => {
         // 1) /proc 기반 CPU 샘플 (pid/stat + /proc/stat delta)
         const current = await parseProcCpuSnapshot();
@@ -646,6 +660,7 @@ export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers
         lastProcCpu = null;
     };
 
+    // current(mA): sysfs 우선, 불가 시 dumpsys battery fallback
     const current: Sampler = async () => {
         const out = await execText(
             `adb -s ${udid} shell "cat /sys/class/power_supply/battery/BatteryAverageCurrent 2>/dev/null || cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/battery/current_avg 2>/dev/null || echo ''"`,
@@ -679,6 +694,9 @@ export function createAosSamplers(options: AosSamplerOptions = {}): PerfSamplers
     return { memory, cpu, current, resetState };
 }
 
+// -----------------------------------------------------------------------------
+// iOS 샘플러
+// -----------------------------------------------------------------------------
 export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers {
     const udid = options.udid ?? IOS.udid;
     const deviceRef = options.deviceRef ?? process.env.IOS_SAMPLER_DEVICE_REF ?? udid;
@@ -834,6 +852,7 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
         return byPid;
     };
 
+    // xctrace 스냅샷 1회를 실행하고 CPU/Memory를 파싱한다.
     const runXctraceSnapshot = async (signal?: AbortSignal, epochAtStart?: number): Promise<Snapshot | null> => {
         if (!xctraceEnabled) return null;
 
@@ -1038,6 +1057,7 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
     const xctraceLoopPauseMs = Math.max(50, Number(process.env.PERF_IOS_XCTRACE_LOOP_PAUSE_MS ?? 100));
     const xctraceStopWaitMs = Math.max(1000, Number(process.env.PERF_IOS_XCTRACE_STOP_WAIT_MS ?? xctraceMs + 2000));
 
+    // 백그라운드 루프에서 최신 snapshot을 유지한다.
     const startSnapshotLoop = () => {
         if (!xctraceEnabled) return;
         if (loopPromise) return;
@@ -1120,6 +1140,7 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
 
     // 1) 사용자 커맨드가 있으면 우선 사용
     // 2) 없으면 xctrace 내장 sampler 시도
+    // memory sampler: 사용자 커맨드 우선, 없으면 xctrace snapshot 사용
     samplers.memory = async () => {
         if (memoryCmd) return execNumber(memoryCmd);
 
@@ -1130,6 +1151,7 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
         return null;
     };
 
+    // cpu sampler: 같은 snapshot 재사용을 피하고 다음 snapshot까지 대기 가능
     samplers.cpu = async () => {
         if (cpuCmd) return execNumber(cpuCmd);
 
@@ -1152,6 +1174,7 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
         return null;
     };
 
+    // current sampler: 사용자 커맨드 우선, 없으면 idevicediagnostics 사용
     samplers.current = async () => {
         if (currentCmd) {
             const n = await execNumber(currentCmd);
@@ -1214,6 +1237,9 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
     return samplers;
 }
 
+// -----------------------------------------------------------------------------
+// 공통 export 헬퍼
+// -----------------------------------------------------------------------------
 export function currentPlatform(): PerfPlatform {
     const p = (process.env.PERF_PLATFORM ?? "ios").toLowerCase();
     return p === "aos" ? "aos" : "ios";
