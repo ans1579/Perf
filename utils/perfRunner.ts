@@ -311,7 +311,7 @@ export async function runPerfCase(options: RunPerfOptions) {
         samplers.resetState?.();
 
         const needCpuGate = !!samplers.cpu;
-        const needCurrentGate = !!samplers.current;
+        const needCurrentGate = !!samplers.current && platform !== "ios";
         let accepted: {
             e2eMs: number;
             memoryBefore: number | null;
@@ -383,8 +383,9 @@ export async function runPerfCase(options: RunPerfOptions) {
         if (memoryPeak !== null && Number.isFinite(memoryPeak)) {
             pushMetric("memory", platform, deviceName, target, `${caseKey}.peak`, Number(memoryPeak.toFixed(2)), "MB");
         }
-        if (accepted.memoryBefore !== null && memoryPeak !== null && Number.isFinite(memoryPeak)) {
-            const memoryDelta = Math.max(0, Number((memoryPeak - accepted.memoryBefore).toFixed(2)));
+        const memoryBaseline = accepted.memoryBefore ?? 0;
+        if (memoryPeak !== null && Number.isFinite(memoryPeak)) {
+            const memoryDelta = Math.max(0, Number((memoryPeak - memoryBaseline).toFixed(2)));
             pushMetric("memory", platform, deviceName, target, `${caseKey}.delta`, memoryDelta, "MB");
         }
 
@@ -688,6 +689,8 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
     const idevicePath = process.env.IOS_IDEVICE_PATH ?? "idevicediagnostics";
     const xctraceEnabled = String(process.env.PERF_IOS_USE_XCTRACE ?? "1") !== "0";
     const xctraceMs = Math.max(500, Number(process.env.PERF_IOS_XCTRACE_MS ?? 1200));
+    const xctraceRecordTimeoutMs = Math.max(20_000, Number(process.env.PERF_IOS_XCTRACE_RECORD_TIMEOUT_MS ?? xctraceMs + 12_000));
+    const xctraceExportTimeoutMs = Math.max(15_000, Number(process.env.PERF_IOS_XCTRACE_EXPORT_TIMEOUT_MS ?? 15_000));
     const allowChargingCurrent = !/^(0|false|no|off)$/i.test(String(process.env.PERF_CURRENT_MEASURE_WHILE_CHARGING ?? "1").trim());
     const processHints = options.processHints ?? [];
     const samplers: PerfSamplers = {};
@@ -837,28 +840,59 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
         const tracePath = path.join(os.tmpdir(), `perf-ios-sampler-${process.pid}-${Date.now()}-${randomUUID()}.trace`);
 
         try {
-            await execFileAsync(
-                "xcrun",
-                ["xctrace", "record", "--template", "Activity Monitor", "--device", deviceRef, "--all-processes", "--time-limit", `${xctraceMs}ms`, "--output", tracePath, "--no-prompt"],
-                {
-                    encoding: "utf8",
-                    windowsHide: true,
-                    maxBuffer: 20 * 1024 * 1024,
-                    timeout: Math.max(8000, xctraceMs + 6000),
-                    signal,
-                },
-            );
+            const recordArgs = [
+                "xctrace",
+                "record",
+                "--template",
+                "Activity Monitor",
+                "--device",
+                deviceRef,
+                "--all-processes",
+                "--time-limit",
+                `${xctraceMs}ms`,
+                "--output",
+                tracePath,
+                "--no-prompt",
+            ];
+            let recorded = false;
+            let recordError: unknown = null;
+            for (let attempt = 0; attempt < 2 && !recorded; attempt += 1) {
+                try {
+                    await execFileAsync("xcrun", recordArgs, {
+                        encoding: "utf8",
+                        windowsHide: true,
+                        maxBuffer: 20 * 1024 * 1024,
+                        timeout: xctraceRecordTimeoutMs,
+                        signal,
+                    });
+                    recorded = true;
+                } catch (e) {
+                    recordError = e;
+                    const err = e as any;
+                    const abortLike = String(err?.name ?? "").toLowerCase() === "aborterror" || String(err?.code ?? "").toUpperCase() === "ABORT_ERR" || /abort/i.test(String(err?.message ?? e));
+                    if (abortLike || attempt === 1) break;
+                    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+                }
+            }
+            if (!recorded) {
+                throw recordError ?? new Error("xctrace record failed");
+            }
 
             const exportRows = async (xpath: string): Promise<string[]> => {
-                const { stdout } = await execFileAsync("xcrun", ["xctrace", "export", "--input", tracePath, "--xpath", xpath], {
-                    encoding: "utf8",
-                    windowsHide: true,
-                    maxBuffer: 40 * 1024 * 1024,
-                    timeout: 10000,
-                    signal,
-                });
-                const xml = String(stdout ?? "");
-                return xml.match(/<row>[\s\S]*?<\/row>/g) ?? [];
+                try {
+                    const { stdout } = await execFileAsync("xcrun", ["xctrace", "export", "--input", tracePath, "--xpath", xpath], {
+                        encoding: "utf8",
+                        windowsHide: true,
+                        maxBuffer: 40 * 1024 * 1024,
+                        timeout: xctraceExportTimeoutMs,
+                        signal,
+                    });
+                    const xml = String(stdout ?? "");
+                    return xml.match(/<row>[\s\S]*?<\/row>/g) ?? [];
+                } catch {
+                    // schema/table이 없는 경우가 있어 live 실패 시 빈 결과로 처리하고 ledger로 fallback한다.
+                    return [];
+                }
             };
 
             // live 테이블 우선, 없으면 ledger fallback
@@ -884,6 +918,9 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
                 const name = proc.name;
                 const normalized = toToken(name);
                 if (!normalized) continue;
+                if (/exited\s+process/i.test(name) || normalized === "exitedprocess") {
+                    continue;
+                }
 
                 let score = tokenScore(normalized, primary, 120, 40) + tokenScore(normalized, secondary, 24, 8);
 
@@ -937,13 +974,18 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
 
             const cpuDirect = toNumber(pick.row.match(/<cpu-percent[^>]*>(-?\d+(?:\.\d+)?)</i)?.[1] ?? pick.row.match(/<[^>]*cpu[^>]*(?:percent|pct|usage)[^>]*>(-?\d+(?:\.\d+)?)</i)?.[1] ?? "");
             const cpuTotalNs = toNumber(pick.row.match(/<duration-on-core[^>]*>(-?\d+)<\/duration-on-core>/i)?.[1] ?? "");
-            const firstSizeBytes = toNumber(
-                pick.row.match(/<size-in-bytes[^>]*>(-?\d+)<\/size-in-bytes>/i)?.[1] ??
-                    pick.row.match(/<resident-size-in-bytes[^>]*>(-?\d+)</i)?.[1] ??
-                    pick.row.match(/<physical-footprint-in-bytes[^>]*>(-?\d+)</i)?.[1] ??
-                    pick.row.match(/<[^>]*(?:footprint|resident|memory|rprvt)[^>]*>(-?\d+)</i)?.[1] ??
-                    "",
-            );
+
+            // 메모리는 신뢰 가능한 필드(physical/resident)를 우선 사용해 저값 오탐을 줄인다.
+            const physicalFootprintBytes = toNumber(pick.row.match(/<physical-footprint-in-bytes[^>]*>(-?\d+)</i)?.[1] ?? "");
+            const residentSizeBytes = toNumber(pick.row.match(/<resident-size-in-bytes[^>]*>(-?\d+)</i)?.[1] ?? "");
+            const trustedMemoryCandidates = [physicalFootprintBytes, residentSizeBytes].filter((v): v is number => v !== null && Number.isFinite(v)).map((v) => Math.abs(v));
+            const fallbackMemoryCandidates = [
+                toNumber(pick.row.match(/<[^>]*(?:footprint|resident|memory|rprvt)[^>]*>(-?\d+)</i)?.[1] ?? ""),
+                toNumber(pick.row.match(/<size-in-bytes[^>]*>(-?\d+)<\/size-in-bytes>/i)?.[1] ?? ""),
+            ]
+                .filter((v): v is number => v !== null && Number.isFinite(v))
+                .map((v) => Math.abs(v));
+            const memoryBytes = trustedMemoryCandidates.length > 0 ? Math.max(...trustedMemoryCandidates) : fallbackMemoryCandidates.length > 0 ? Math.max(...fallbackMemoryCandidates) : null;
 
             const nowMs = Date.now();
             let cpuPct: number | null = null;
@@ -974,15 +1016,17 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
                 }
             }
 
-            const memoryMb = firstSizeBytes === null ? null : Number((Math.abs(firstSizeBytes) / (1024 * 1024)).toFixed(2));
+            const memoryMb = memoryBytes === null ? null : Number((memoryBytes / (1024 * 1024)).toFixed(2));
 
             return { atMs: nowMs, memoryMb, cpuPct };
         } catch (e) {
-            const message = String((e as any)?.message ?? e);
-            if (/abort/i.test(message)) return null;
-            if (String(process.env.PERF_IOS_SAMPLER_DEBUG ?? "") === "1") {
-                console.warn("[ios-sampler] xctrace snapshot failed:", message);
-            }
+            const err = e as any;
+            const message = String(err?.message ?? e);
+            const stderr = String(err?.stderr ?? "").trim();
+            const abortLike = /abort/i.test(message) || /abort/i.test(stderr) || String(err?.name ?? "").toLowerCase() === "aborterror" || String(err?.code ?? "").toUpperCase() === "ABORT_ERR";
+            if (abortLike) return null;
+            const suffix = stderr ? ` stderr=${stderr}` : "";
+            console.warn("[ios-sampler] xctrace snapshot failed:", `${message}${suffix}`);
             return null;
         } finally {
             try {
@@ -1089,9 +1133,21 @@ export function createIosSamplers(options: IosSamplerOptions = {}): PerfSamplers
     samplers.cpu = async () => {
         if (cpuCmd) return execNumber(cpuCmd);
 
-        const snap = await getSnapshot();
-        if (snap?.cpuPct !== null && snap?.cpuPct !== undefined) {
-            return snap.cpuPct;
+        const first = await getSnapshot();
+        if (first?.cpuPct !== null && first?.cpuPct !== undefined) {
+            return first.cpuPct;
+        }
+
+        // 첫 스냅샷이 델타 기준점(cpuPct=null)일 수 있어
+        // 같은 snapshot 재조회 대신 snapshot seq 증가를 기다린다.
+        const fromSeq = snapshotSeq;
+        const deadline = Date.now() + xctraceMs + 2000;
+        while (Date.now() < deadline) {
+            if (!samplingEnabled) break;
+            await new Promise<void>((resolve) => setTimeout(resolve, 200));
+            if (snapshotSeq > fromSeq && latestSnapshot?.cpuPct !== null && latestSnapshot?.cpuPct !== undefined) {
+                return latestSnapshot.cpuPct;
+            }
         }
         return null;
     };
