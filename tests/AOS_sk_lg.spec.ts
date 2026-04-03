@@ -27,7 +27,7 @@ test("T 우주 vs 유독 실행 성능 비교", async () => {
     const platform = "aos" as const;
     const driver = await openDriver(platform);
 
-    const repeat = 5;
+    const repeat = 3;
 
     // 앱별로 진입 방식이 다르면 run(측정구간)을 각각 다르게 작성합니다.
     const flows: AppFlow[] = [
@@ -39,6 +39,15 @@ test("T 우주 vs 유독 실행 성능 비교", async () => {
             sampleMs: 1000,
             beforeRun: async () => {
                 await driver.terminateApp(APP_T.pkg).catch(() => {});
+                if (
+                    await driver
+                        .$(`//android.widget.TextView[@text="오늘 하루 그만보기"]`)
+                        .isDisplayed()
+                        .catch(() => false)
+                ) {
+                    await driver.$(`//android.widget.CheckBox[@text="오늘 하루 그만보기"]`).click();
+                    await driver.$(`//android.widget.Button[@text="닫기"]`).click();
+                }
             },
             run: async () => {
                 // T우주 측정구간: 앱 활성화 후 고유 텍스트 확인까지
@@ -61,12 +70,21 @@ test("T 우주 vs 유독 실행 성능 비교", async () => {
                 await driver.pause(3000);
 
                 await driver.$(`//*[@text="전체메뉴 열기"]`).click();
+                await driver.pause(1000);
                 await driver.$(`//android.view.View[@text="스토어"]`).click();
                 await driver.$(`//*[@text="유독 구독 상품 · MY 구독"]`).click();
             },
             run: async () => {
                 // 유독 측정구간: 앱 메뉴에서 유독 홈 클릭 후 고유 셀렉터 확인까지
                 await driver.$(`//*[@text="유독 홈"]`).click();
+                if (
+                    await driver
+                        .$(`//android.widget.Button[@content-desc="오늘 하루 팝업 닫기"]`)
+                        .isDisplayed()
+                        .catch(() => false)
+                ) {
+                    await driver.$(`//android.widget.Button[@content-desc="오늘 하루 팝업 닫기"]`).click();
+                }
                 await driver.$(`//android.view.View[@content-desc="OTT 메뉴 이동"]`).waitForDisplayed({ timeout: 30000 });
             },
             afterRun: async () => {

@@ -21,9 +21,9 @@ function toPositiveInt(value: number, fallback: number): number {
 
 export const IOS = {
     host: process.env.IOS_APPIUM_HOST ?? "127.0.0.1",
-    port: numEnv("IOS_APPIUM_PORT", 4724),
+    port: numEnv("IOS_APPIUM_PORT", 4725),
     path: process.env.IOS_APPIUM_PATH ?? "/",
-    udid: process.env.IOS_UDID ?? "00008140-001C09881E80801C",
+    udid: process.env.IOS_UDID ?? "00008030-0009316A2EDA802E",
     bundleId: process.env.IOS_BUNDLE_ID ?? "com.sktelecom.miniTworld.ad.stg",
     wdaLocalPort: numEnv("IOS_WDA_LOCAL_PORT", 8102),
     newCommandTimeoutSec: numEnv("IOS_NEW_COMMAND_TIMEOUT", 300),
@@ -55,10 +55,7 @@ export const AOS = {
     androidInstallTimeoutMs: numEnv("AOS_ANDROID_INSTALL_TIMEOUT", 120000),
     webviewDevtoolsPort: numEnv("AOS_WEBVIEW_DEVTOOLS_PORT", 10900),
     chromedriverPort: numEnv("AOS_CHROMEDRIVER_PORT", 8000),
-    chromedriverPortRangeStart: numEnv(
-        "AOS_CHROMEDRIVER_PORT_RANGE_START",
-        9000,
-    ),
+    chromedriverPortRangeStart: numEnv("AOS_CHROMEDRIVER_PORT_RANGE_START", 9000),
     chromedriverPortRangeEnd: numEnv("AOS_CHROMEDRIVER_PORT_RANGE_END", 9050),
     connectionRetryTimeoutMs: numEnv("AOS_WD_CONNECTION_RETRY_TIMEOUT", 120000),
     connectionRetryCount: numEnv("AOS_WD_CONNECTION_RETRY_COUNT", 2),
@@ -79,6 +76,7 @@ export async function openIosDriver() {
         "appium:udid": IOS.udid,
         "appium:deviceName": IOS.udid,
         "appium:bundleId": IOS.bundleId,
+        "appium:autoLaunch": false,
 
         "appium:noReset": true,
         "appium:newCommandTimeout": IOS.newCommandTimeoutSec,
@@ -136,10 +134,7 @@ export async function openAosDriver() {
         "appium:ensureWebviewsHavePages": true,
         "appium:chromedriverAutodownload": true,
         "appium:recreateChromeDriverSessions": true,
-        "appium:webviewDevtoolsPort": toPositiveInt(
-            AOS.webviewDevtoolsPort,
-            10900,
-        ),
+        "appium:webviewDevtoolsPort": toPositiveInt(AOS.webviewDevtoolsPort, 10900),
         "appium:chromedriverPorts": chromedriverPorts,
     };
 
